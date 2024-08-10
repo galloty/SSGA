@@ -16,15 +16,25 @@ Please give feedback to the authors if improvement is realized. It is distribute
 // modulo 2^n + 1
 class Mod
 {
-public:
-	static unsigned int n;
-
 private:
 	mpz_t _z;
+	static unsigned int _n;
+	static mpz_t _F;
 
-	static void set_F(mpz_t & F) { mpz_set_ui(F, 1); mpz_mul_2exp(F, F, n); mpz_add_ui(F, F, 1); }
+	void _mod()
+	{
+		Mod hi; mpz_fdiv_q_2exp(hi._z, _z, _n); mpz_fdiv_r_2exp(_z, _z, _n);
+		*this = *this - hi;
+		if (mpz_sgn(_z) < 0) mpz_add(_z, _z, _F);
+	}
 
 public:
+	static void init() { mpz_init(_F); }
+	static void clear() { mpz_clear(_F); }
+
+	static void set_n(const unsigned int n) { _n = n; mpz_set_ui(_F, 1); mpz_mul_2exp(_F, _F, n); mpz_add_ui(_F, _F, 1); }
+	static unsigned int get_n() { return _n; }
+
 	Mod() { mpz_init(_z); }
 	Mod(const Mod & rhs) { mpz_init_set(_z, rhs._z); }
 	Mod(unsigned int n) { mpz_init_set_ui(_z, n); }
@@ -37,52 +47,41 @@ public:
 
  	Mod operator-() const
 	{
-		mpz_t F; mpz_init(F); set_F(F);
-		Mod r;
-		if (mpz_cmp_ui(_z, 0) == 0) mpz_set(r._z, _z); else mpz_sub(r._z, F, _z);
-		mpz_clear(F);
+		Mod r; if (mpz_sgn(_z) == 0) mpz_set(r._z, _z); else mpz_sub(r._z, _F, _z);
 		return r;
 	}
 
 	Mod operator+(const Mod & rhs) const
 	{
-		mpz_t F; mpz_init(F); set_F(F);
 		Mod r; mpz_add(r._z, _z, rhs._z);
-		mpz_mod(r._z, r._z, F);
-		mpz_clear(F);
+		if (mpz_cmp(r._z, _F) >= 0) mpz_sub(r._z, r._z, _F);
 		return r;
 	}
 
 	Mod operator-(const Mod & rhs) const
 	{
-		mpz_t F; mpz_init(F); set_F(F);
-		Mod r; mpz_sub(r._z, _z, rhs._z); mpz_add(r._z, r._z, F);
-		mpz_mod(r._z, r._z, F);
-		mpz_clear(F);
+		Mod r; mpz_sub(r._z, _z, rhs._z);
+		if (mpz_sgn(r._z) < 0) mpz_add(r._z, r._z, _F);
 		return r;
-
 	}
 
 	Mod operator<<(const size_t s) const
 	{
-		mpz_t F; mpz_init(F); set_F(F);
 		Mod r; mpz_mul_2exp(r._z, _z, s);
-		mpz_mod(r._z, r._z, F);
-		mpz_clear(F);
+		r._mod();
 		return r;
 	}
 
 	Mod & operator*=(const Mod & rhs)
 	{
-		mpz_t F; mpz_init(F); set_F(F);
 		mpz_mul(_z, _z, rhs._z);
-		mpz_mod(_z, _z, F);
-		mpz_clear(F);
+		_mod();
 		return *this;
 	}
 };
 
-unsigned int Mod::n = 0;
+unsigned int Mod::_n = 0;
+mpz_t Mod::_F;
 
 static void mul(const size_t m, const size_t s, const size_t e, Mod * const x, Mod * const y)
 {
@@ -102,10 +101,10 @@ static void mul(const size_t m, const size_t s, const size_t e, Mod * const x, M
 		y[k + 0 * m_2] = u0 + u1; y[k + 1 * m_2] = u0 - u1;
 	}
 
-	mul(m_2, 2 * s, e / 2 + 0 * Mod::n, &x[0 * m_2], &y[0 * m_2]);	// w = 2^e
-	mul(m_2, 2 * s, e / 2 + 1 * Mod::n, &x[1 * m_2], &y[1 * m_2]);	// root of -w
+	mul(m_2, 2 * s, e / 2 + 0 * Mod::get_n(), &x[0 * m_2], &y[0 * m_2]);	// w = 2^e
+	mul(m_2, 2 * s, e / 2 + 1 * Mod::get_n(), &x[1 * m_2], &y[1 * m_2]);	// root of -w
 
-	const size_t me_2 = Mod::n - e / 2;		// 2^n = -1 then sr^-1 = 2^-{e/2} = -2^{n - e/2}
+	const size_t me_2 = Mod::get_n() - e / 2;		// 2^n = -1 then sr^-1 = 2^-{e/2} = -2^{n - e/2}
 	for (size_t k = 0; k < m_2; ++k)
 	{
 		const Mod u0 = x[k + 0 * m_2], u1 = x[k + 1 * m_2];
@@ -134,8 +133,8 @@ static void mul_Mersenne(const size_t m, const size_t s, Mod * const x, Mod * co
 		y[k + 0 * m_2] = u0 + u1; y[k + 1 * m_2] = u0 - u1;
 	}
 
-	mul_Mersenne(m_2, 2 * s, &x[0 * m_2], &y[0 * m_2]);	// root of 1 is still 1
-	mul(m_2, 2 * s, Mod::n, &x[1 * m_2], &y[1 * m_2]);	// root is -1 = 2^n
+	mul_Mersenne(m_2, 2 * s, &x[0 * m_2], &y[0 * m_2]);			// root of 1 is still 1
+	mul(m_2, 2 * s, Mod::get_n(), &x[1 * m_2], &y[1 * m_2]);	// root is -1 = 2^n
 
 	for (size_t k = 0; k < m_2; ++k)
 	{
@@ -182,7 +181,7 @@ static void fill_vector(Mod * const a, const size_t l, const mpz_t & x, const si
 // Recursive Schönhage-Strassen-Gallot algorithm, z = x * y (mod 2^N + 1)
 static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const unsigned int k, const size_t l, const size_t M, const size_t n)
 {
-	Mod::n = n;	// modulo 2^n + 1
+	Mod::set_n(n);	// modulo 2^n + 1
 
 	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
@@ -211,7 +210,7 @@ static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const un
 // Recursive Schönhage-Strassen-Gallot algorithm, z = x * y (mod 2^N - 1)
 static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsigned int k, const size_t l, const size_t M, const size_t n)
 {
-	Mod::n = n;	// modulo 2^n + 1
+	Mod::set_n(n);	// modulo 2^n + 1
 
 	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
@@ -229,13 +228,13 @@ static void SSG_mul(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t N)
 {
 	unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
 
-	Mod::n = n;	// modulo 2^n + 1
+	Mod::set_n(n);	// modulo 2^n + 1
 
 	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
 	mul_Mersenne(l, 1, a, b);	// top-most recursion level
 
-	// Components are to halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+	// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
 	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
 	// Compute sum of the l M-bit part of z
@@ -244,17 +243,19 @@ static void SSG_mul(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t N)
 
 int main()
 {
+	Mod::init();
+
 	gmp_randstate_t randstate;
 	gmp_randinit_default(randstate);
 	gmp_randseed_ui(randstate, (unsigned long int)(time(nullptr)));
 	mpz_t x, y, z, zp, t; mpz_inits(x, y, z, zp, t, nullptr);
 
-	const size_t n_min = 13761, n_max = 20000000;
+	const size_t n_min = 13761, n_max = 50000000;
 
 	std::cout << "Check SSG algorithm modulo 2^{M*l} + 1:" << std::endl;
 	for (size_t N = n_min; N < n_max; N *= 3)
 	{
-		// Generate two random numbers
+		// Generate two random numbers of size N
 		mpz_urandomb(x, randstate, N); mpz_urandomb(y, randstate, N);
 
 		// Get SSA parameters
@@ -273,7 +274,7 @@ int main()
 	std::cout << std::endl << "Check SSG algorithm modulo 2^{M*l} - 1:" << std::endl;
 	for (size_t N = n_min; N < n_max; N *= 3)
 	{
-		// Generate two random numbers
+		// Generate two random numbers of size N
 		mpz_urandomb(x, randstate, N); mpz_urandomb(y, randstate, N);
 
 		// Get SSA parameters
@@ -305,6 +306,8 @@ int main()
 
 	mpz_clears(x, y, z, zp, t, nullptr);
 	gmp_randclear(randstate);
+
+	Mod::clear();
 
 	return EXIT_SUCCESS;
 }
