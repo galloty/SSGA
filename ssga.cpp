@@ -196,7 +196,6 @@ static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const un
 	{
 		mpz_mul_2exp(z, z, M);
 		// negacyclic convolution can generate negative outputs
-		mpz_t c; mpz_init(c);
 		mpz_set(c, a[l - i - 1].get());
 		if (mpz_cmp(c, F_half) > 0) mpz_sub(c, c, F);
 		mpz_add(z, z, c);
