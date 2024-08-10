@@ -219,7 +219,7 @@ static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsign
 	mpz_set_ui(z, 0); for (size_t i = 0; i < l; ++i) { mpz_mul_2exp(z, z, M); mpz_add(z, z, a[l - i - 1].get()); }
 }
 
-// Recursive Schönhage-Strassen-Gallot algorithm, z < 2^N
+// Recursive Schönhage-Strassen-Gallot algorithm, z < 2^N - 1
 static void SSG_mul(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t N)
 {
 	unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
