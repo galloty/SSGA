@@ -24,5 +24,10 @@ Because the roots are themselves some powers of two in Schönhage-Strassen algor
 Schönhage and Strassen used a Fermat number 2<sup>*N*</sup> + 1 for top level ring and another smaller Fermat number 2<sup>*n*</sup> + 1 is the modulus of the ring of integers of the transform such that the algorithm can be evaluated recursively.  
 But a Fermat number is not needed for top level and a Mersenne number 2<sup>*N*</sup> - 1 is a better choice because one is a root of *x*<sup>*N*</sup> - 1 and this avoids some bit shifts.  
 
+## Implementation
+
+Notations and parameter selection are based on  
+Pierrick Gaudry, Alexander Kruppa, Paul Zimmermann. *A GMP-based implementation of Schönhage-Strassen's large integer multiplication algorithm*. ISSAC 2007, Jul 2007, Waterloo, Ontario, Canada. pp.167-174, ⟨10.1145/1277548.1277572⟩. [inria-00126462](https://inria.hal.science/inria-00126462).  
+
 The transform is invariably based on the Fermat ring 2<sup>*n*</sup> + 1.  
 The function **SSG_mul_Fermat** implements *x* &times; *y* mod 2<sup>*N*</sup> + 1 and **SSG_mul_Mersenne** implements *x* &times; *y* mod 2<sup>*N*</sup> - 1.  **SSG_mul** makes use of a Mersenne number to split the product of a *N*-bit number into *l* products of *n* bits, where *l* ~ sqrt(*N*) and *n* ~ 3 sqrt(*N*).  
