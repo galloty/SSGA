@@ -35,6 +35,15 @@ public:
 
 	const mpz_t & get() const { return _z; }
 
+ 	Mod operator-() const
+	{
+		mpz_t F; mpz_init(F); set_F(F);
+		Mod r;
+		if (mpz_cmp_ui(_z, 0) == 0) mpz_set(r._z, _z); else mpz_sub(r._z, F, _z);
+		mpz_clear(F);
+		return r;
+	}
+
 	Mod operator+(const Mod & rhs) const
 	{
 		mpz_t F; mpz_init(F); set_F(F);
@@ -54,10 +63,10 @@ public:
 
 	}
 
-	Mod operator*(const Mod & rhs) const
+	Mod operator<<(const size_t s) const
 	{
 		mpz_t F; mpz_init(F); set_F(F);
-		Mod r; mpz_mul(r._z, _z, rhs._z);
+		Mod r; mpz_mul_2exp(r._z, _z, s);
 		mpz_mod(r._z, r._z, F);
 		mpz_clear(F);
 		return r;
@@ -71,23 +80,6 @@ public:
 		mpz_clear(F);
 		return *this;
 	}
-
-	Mod half() const
-	{
-		mpz_t F; mpz_init(F); set_F(F);
-		Mod r = *this;
-		if (mpz_odd_p(_z)) mpz_add(r._z, r._z, F);
-		mpz_div_2exp(r._z, r._z, 1);
-		return r;
-	}
-
-	Mod pow(const size_t e) const
-	{
-		if (e == 0) return Mod(1);
-		Mod r = Mod(1), y = *this;
-		for (size_t i = e; i != 1; i /= 2) { if (i % 2 != 0) r *= y; y *= y; }
-		return r * y;
-	}
 };
 
 unsigned int Mod::n = 0;
@@ -96,31 +88,29 @@ static void mul(const size_t m, const size_t s, const size_t e, Mod * const x, M
 {
 	if (m == 1) { x[0] *= y[0]; return; }
 
-	const size_t m_2 = m / 2;
-
-	const Mod sr = Mod(2).pow(e / 2);	// // root is 2^e, a square root is 2 ^{e/2}
+	const size_t m_2 = m / 2, e_2 = e / 2;	// root is 2^e, a square root is 2 ^{e/2}
 
 	for (size_t k = 0; k < m_2; ++k)
 	{
-		const Mod u0 = x[k + 0 * m_2], u1 = x[k + 1 * m_2] * sr;
+		const Mod u0 = x[k + 0 * m_2], u1 = x[k + 1 * m_2] << e_2;
 		x[k + 0 * m_2] = u0 + u1; x[k + 1 * m_2] = u0 - u1;
 	}
 
 	for (size_t k = 0; k < m_2; ++k)
 	{
-		const Mod u0 = y[k + 0 * m_2], u1 = y[k + 1 * m_2] * sr;
+		const Mod u0 = y[k + 0 * m_2], u1 = y[k + 1 * m_2] << e_2;
 		y[k + 0 * m_2] = u0 + u1; y[k + 1 * m_2] = u0 - u1;
 	}
 
 	mul(m_2, 2 * s, e / 2 + 0 * Mod::n, &x[0 * m_2], &y[0 * m_2]);	// w = 2^e
 	mul(m_2, 2 * s, e / 2 + 1 * Mod::n, &x[1 * m_2], &y[1 * m_2]);	// root of -w
 
-	const Mod msri = Mod(2).pow(Mod::n - e / 2);	// 2^n = -1 then sr^-1 = 2^-{e/2} = -2^{n - e/2}
+	const size_t me_2 = Mod::n - e / 2;		// 2^n = -1 then sr^-1 = 2^-{e/2} = -2^{n - e/2}
 	for (size_t k = 0; k < m_2; ++k)
 	{
 		const Mod u0 = x[k + 0 * m_2], u1 = x[k + 1 * m_2];
-		x[k + 0 * m_2] = Mod(u0 + u1).half();
-		x[k + 1 * m_2] = Mod((u1 - u0) * msri).half();
+		x[k + 0 * m_2] = u0 + u1;
+		x[k + 1 * m_2] = (u1 - u0) << me_2;
 	}
 }
 
@@ -150,8 +140,8 @@ static void mul_Mersenne(const size_t m, const size_t s, Mod * const x, Mod * co
 	for (size_t k = 0; k < m_2; ++k)
 	{
 		const Mod u0 = x[k + 0 * m_2], u1 = x[k + 1 * m_2];
-		x[k + 0 * m_2] = Mod(u0 + u1).half();
-		x[k + 1 * m_2] = Mod(u0 - u1).half();
+		x[k + 0 * m_2] = u0 + u1;
+		x[k + 1 * m_2] = u0 - u1;
 	}
 }
 
@@ -167,17 +157,18 @@ static double get_param(const size_t N, const unsigned int k, size_t & l, size_t
 	return	double(t) / n;	// efficiency
 }
 
-static double get_best_param(const size_t N, unsigned int & k, size_t & l, size_t & M, size_t & n)
+static void get_best_param(const size_t N, unsigned int & k, size_t & l, size_t & M, size_t & n)
 {
 	k = 0;
 	for (unsigned int i = 1; true; ++i)
 	{
 		size_t l_i, M_i, n_i; const double efficiency = get_param(N, i, l_i, M_i, n_i);
 		if (l_i > 2 * std::sqrt(M_i * l_i)) break;
-		if (efficiency > 0.95) k = i;
+		if (efficiency > 0.8) k = i;
 	}
 
-	return get_param(N, k, l, M, n);
+	const double efficiency = get_param(N, k, l, M, n);
+ 	std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << M * l << ", M = " << M << ", l = " << l << ", n = " << n << ", efficiency = " << efficiency << ", ";
 }
 
 // a is a vector of l M-bit part of x
@@ -189,13 +180,16 @@ static void fill_vector(Mod * const a, const size_t l, const mpz_t & x, const si
 }
 
 // Recursive Schönhage-Strassen-Gallot algorithm, z = x * y (mod 2^N + 1)
-static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t l, const size_t M, const size_t n)
+static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const unsigned int k, const size_t l, const size_t M, const size_t n)
 {
 	Mod::n = n;	// modulo 2^n + 1
 
-	Mod a[l], b[l]; fill_vector(a, l, x, M);  fill_vector(b, l, y, M);
+	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
 	mul(l, 1, n, a, b);	// top-most recursion level, the initial root is -1 = 2^n
+
+	// Components are to halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
 	// Compute sum of the l M-bit part of z
 	mpz_t F, F_half, c; mpz_inits(F, F_half, c, nullptr);
@@ -215,13 +209,16 @@ static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const si
 }
 
 // Recursive Schönhage-Strassen-Gallot algorithm, z = x * y (mod 2^N - 1)
-static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t l, const size_t M, const size_t n)
+static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsigned int k, const size_t l, const size_t M, const size_t n)
 {
 	Mod::n = n;	// modulo 2^n + 1
 
-	Mod a[l], b[l]; fill_vector(a, l, x, M);  fill_vector(b, l, y, M);
+	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
 	mul_Mersenne(l, 1, a, b);	// top-most recursion level
+
+	// Components are to halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
 	// Compute sum of the l M-bit part of z
 	mpz_set_ui(z, 0); for (size_t i = 0; i < l; ++i) { mpz_mul_2exp(z, z, M); mpz_add(z, z, a[l - i - 1].get()); }
@@ -230,17 +227,16 @@ static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, const 
 // Recursive Schönhage-Strassen-Gallot algorithm
 static void SSG_mul(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t N)
 {
-	unsigned int k = 0;	size_t l, M, n; const double efficiency = get_best_param(N, k, l, M, n);
-	std::cout << "N = " << N << ", N' = " << M * l <<", M = " << M << ", l = " << l << ", n = " << n << ", efficiency = " << efficiency << ", ";
+	unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
 
 	Mod::n = n;	// modulo 2^n + 1
 
-	Mod a[l], b[l]; fill_vector(a, l, x, M);  fill_vector(b, l, y, M);
+	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
 	mul_Mersenne(l, 1, a, b);	// top-most recursion level
 
-	// 2^n = -1 then 1/l = -2^n / l = -2^{n - k}
-	// for (size_t i = 0; i < l; ++i)
+	// Components are to halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
 	// Compute sum of the l M-bit part of z
 	mpz_set_ui(z, 0); for (size_t i = 0; i < l; ++i) { mpz_mul_2exp(z, z, M); mpz_add(z, z, a[l - i - 1].get()); }
@@ -253,48 +249,48 @@ int main()
 	gmp_randseed_ui(randstate, (unsigned long int)(time(nullptr)));
 	mpz_t x, y, z, zp, t; mpz_inits(x, y, z, zp, t, nullptr);
 
+	const size_t n_min = 13761, n_max = 20000000;
+
 	std::cout << "Check SSG algorithm modulo 2^{M*l} + 1:" << std::endl;
-	for (size_t N = 13761; N < 10000000; N *= 3)
+	for (size_t N = n_min; N < n_max; N *= 3)
 	{
 		// Generate two random numbers
 		mpz_urandomb(x, randstate, N); mpz_urandomb(y, randstate, N);
 
 		// Get SSA parameters
-		unsigned int k = 0;	size_t l, M, n; const double efficiency = get_best_param(N, k, l, M, n);
-		std::cout << "N = " << N << ", N' = " << M * l <<", M = " << M << ", l = " << l << ", n = " << n << ", efficiency = " << efficiency << ", ";
+		unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
 
 		// x * y (mod 2^{M*l} + 1)
 		mpz_set_ui(t, 1); mpz_mul_2exp(t, t, M * l); mpz_add_ui(t, t, 1);
 		mpz_mul(z, x, y); mpz_mod(z, z, t);
 
-		SSG_mul_Fermat(zp, x, y, l, M, n);
+		SSG_mul_Fermat(zp, x, y, k, l, M, n);
 		mpz_mod(zp, zp, t);
 
 		std::cout << ((mpz_cmp(z, zp) == 0) ? "OK" : "Error") << std::endl;
 	}
 
 	std::cout << std::endl << "Check SSG algorithm modulo 2^{M*l} - 1:" << std::endl;
-	for (size_t N = 13761; N < 10000000; N *= 3)
+	for (size_t N = n_min; N < n_max; N *= 3)
 	{
 		// Generate two random numbers
 		mpz_urandomb(x, randstate, N); mpz_urandomb(y, randstate, N);
 
 		// Get SSA parameters
-		unsigned int k = 0;	size_t l, M, n; const double efficiency = get_best_param(N, k, l, M, n);
-		std::cout << "N = " << N << ", N' = " << M * l <<", M = " << M << ", l = " << l << ", n = " << n << ", efficiency = " << efficiency << ", ";
+		unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
 
 		// x * y (mod 2^{M*l} - 1)
 		mpz_set_ui(t, 1); mpz_mul_2exp(t, t, M * l); mpz_sub_ui(t, t, 1);
 		mpz_mul(z, x, y); mpz_mod(z, z, t);
 
-		SSG_mul_Mersenne(zp, x, y, l, M, n);
+		SSG_mul_Mersenne(zp, x, y, k, l, M, n);
 		mpz_mod(zp, zp, t);
 
 		std::cout << ((mpz_cmp(z, zp) == 0) ? "OK" : "Error") << std::endl;
 	}
 
 	std::cout << std::endl << "Check SSG algorithm (using 2^N - 1 and such that x * y < 2^N - 1):" << std::endl;
-	for (size_t N = 13761; N < 10000000; N *= 3)
+	for (size_t N = n_min; N < n_max; N *= 3)
 	{
 		// Generate two random numbers such that x * y < 2^N - 1
 		const size_t x_size = 4 * N / 5, y_size = N / 5;
