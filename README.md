@@ -19,5 +19,5 @@ These relations are easy to invert. If *b*<sub>*i*</sub> = *a*<sub>*i*</sub> + *
 *a*<sub>*i*</sub> = (*b*<sub>*i*</sub> + *b*<sub>*n*+*i*</sub>) / 2,  
 *a*<sub>*n*+*i*</sub> = (*b*<sub>*i*</sub> - *b*<sub>*n*+*i*</sub>) / 2*r*.
 
-If *n* is a power of two and the roots of *r* exist then the relation can be applied recursively.  
+If *n* is a power of two and the roots of *r* exist then the relations can be applied recursively.  
 Because the roots are themselves some powers of two in Schönhage-Strassen algorithm, the multiplications in the forward and inverse relations are simple bit shifts.
