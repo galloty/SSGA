@@ -18,22 +18,21 @@ class Mod
 {
 private:
 	mpz_t _z;
-	static unsigned int _n;
+	static size_t _n;
 	static mpz_t _F;
 
 	void _mod()
 	{
 		Mod hi; mpz_fdiv_q_2exp(hi._z, _z, _n); mpz_fdiv_r_2exp(_z, _z, _n);
 		*this = *this - hi;
-		if (mpz_sgn(_z) < 0) mpz_add(_z, _z, _F);
 	}
 
 public:
 	static void init() { mpz_init(_F); }
 	static void clear() { mpz_clear(_F); }
 
-	static void set_n(const unsigned int n) { _n = n; mpz_set_ui(_F, 1); mpz_mul_2exp(_F, _F, n); mpz_add_ui(_F, _F, 1); }
-	static unsigned int get_n() { return _n; }
+	static void set_n(const size_t n) { _n = n; mpz_set_ui(_F, 1); mpz_mul_2exp(_F, _F, n); mpz_add_ui(_F, _F, 1); }
+	static size_t get_n() { return _n; }
 
 	Mod() { mpz_init(_z); }
 	Mod(const Mod & rhs) { mpz_init_set(_z, rhs._z); }
@@ -80,7 +79,7 @@ public:
 	}
 };
 
-unsigned int Mod::_n = 0;
+size_t Mod::_n = 0;
 mpz_t Mod::_F;
 
 static void mul(const size_t m, size_t e, Mod * const x, Mod * const y)
