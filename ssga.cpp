@@ -139,31 +139,33 @@ static void mul_Mersenne(const size_t m, Mod * const x, Mod * const y)
 	}
 }
 
-static double get_param(const size_t N, const unsigned int k, size_t & l, size_t & M, size_t & n)
+static double get_param(const size_t N, const unsigned int k, size_t & M, size_t & n)
 {
 	// See Pierrick Gaudry, Alexander Kruppa, Paul Zimmermann.
 	// A GMP-based implementation of Schönhage-Strassen's large integer multiplication algorithm.
 	// ISSAC 2007, Jul 2007, Waterloo, Ontario, Canada. pp.167-174, ⟨10.1145/1277548.1277572⟩. ⟨inria-00126462v2⟩
-	l = size_t(1) << k;
-	M = (N % l == 0) ? N / l : N / l + 1;
+	const size_t K = size_t(1) << k;
+	M = (N % K == 0) ? N / K : N / K + 1;
 	const size_t t = 2 * M + k;
-	n = t; if (n % l != 0) n = (n / l + 1) * l;
+	n = t; if (n % K != 0) n = (n / K + 1) * K;
 	return	double(t) / n;	// efficiency
 }
 
-static void get_best_param(const size_t N, unsigned int & k, size_t & l, size_t & M, size_t & n)
+static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n)
 {
 	k = 0;
 	for (unsigned int i = 1; true; ++i)
 	{
-		size_t l_i, M_i, n_i; const double efficiency = get_param(N, i, l_i, M_i, n_i);
-		if (l_i > 2 * std::sqrt(M_i * l_i)) break;
+		size_t M_i, n_i; const double efficiency = get_param(N, i, M_i, n_i);
+		if (n_i % 64 != 0) continue;
+		const size_t K_i = size_t(1) << i;
+		if (K_i > 2 * std::sqrt(M_i * K_i)) break;
 		if (efficiency > 0.8) k = i;
 	}
 
-	const double efficiency = get_param(N, k, l, M, n);
- 	std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << M * l << ", M = " << M
-		<< ", l = " << l << ", n = " << n << ", efficiency = " << efficiency << ", ";
+	const double efficiency = get_param(N, k, M, n);
+ 	std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << (M << k) << ", M = " << M
+		<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
 }
 
 // a is a vector of l M-bit part of x
@@ -175,15 +177,16 @@ static void fill_vector(Mod * const a, const size_t l, const mpz_t & x, const si
 }
 
 // Recursive Schönhage-Strassen-Gallot algorithm, z = x * y (mod 2^N + 1)
-static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const unsigned int k, const size_t l, const size_t M, const size_t n)
+static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const unsigned int k, const size_t M, const size_t n)
 {
+	const size_t l = size_t(1) << k;
 	Mod::set_n(n);	// modulo 2^n + 1
 
 	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
 	mul(l / 2, n, a, b);	// top-most recursion level, the initial root is -1 = 2^n
 
-	// Components are to halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+	// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
 	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
 	// Compute sum of the l M-bit part of z
@@ -203,15 +206,16 @@ static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const un
 }
 
 // Recursive Schönhage-Strassen-Gallot algorithm, z = x * y (mod 2^N - 1)
-static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsigned int k, const size_t l, const size_t M, const size_t n)
+static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsigned int k, const size_t M, const size_t n)
 {
+	const size_t l = size_t(1) << k;
 	Mod::set_n(n);	// modulo 2^n + 1
 
 	Mod a[l], b[l]; fill_vector(a, l, x, M); fill_vector(b, l, y, M);
 
 	mul_Mersenne(l / 2, a, b);	// top-most recursion level
 
-	// Components are to halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+	// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
 	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
 	// Compute sum of the l M-bit part of z
@@ -221,8 +225,8 @@ static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsign
 // Recursive Schönhage-Strassen-Gallot algorithm, z < 2^N - 1
 static void SSG_mul(mpz_t & z, const mpz_t & x, const mpz_t & y, const size_t N)
 {
-	unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
-	SSG_mul_Mersenne(z, x, y, k, l, M, n);
+	unsigned int k = 0;	size_t M, n; get_best_param(N, k, M, n);
+	SSG_mul_Mersenne(z, x, y, k, M, n);
 }
 
 int main()
@@ -243,13 +247,13 @@ int main()
 		mpz_urandomb(x, randstate, N); mpz_urandomb(y, randstate, N);
 
 		// Get SSA parameters
-		unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
+		unsigned int k = 0;	size_t M, n; get_best_param(N, k, M, n);
 
 		// x * y (mod 2^{M*l} + 1)
-		mpz_set_ui(t, 1); mpz_mul_2exp(t, t, M * l); mpz_add_ui(t, t, 1);
+		mpz_set_ui(t, 1); mpz_mul_2exp(t, t, M << k); mpz_add_ui(t, t, 1);
 		mpz_mul(z, x, y); mpz_mod(z, z, t);
 
-		SSG_mul_Fermat(zp, x, y, k, l, M, n);
+		SSG_mul_Fermat(zp, x, y, k, M, n);
 		mpz_mod(zp, zp, t);
 
 		std::cout << ((mpz_cmp(z, zp) == 0) ? "OK" : "Error") << std::endl;
@@ -262,13 +266,13 @@ int main()
 		mpz_urandomb(x, randstate, N); mpz_urandomb(y, randstate, N);
 
 		// Get SSA parameters
-		unsigned int k = 0;	size_t l, M, n; get_best_param(N, k, l, M, n);
+		unsigned int k = 0;	size_t M, n; get_best_param(N, k, M, n);
 
 		// x * y (mod 2^{M*l} - 1)
-		mpz_set_ui(t, 1); mpz_mul_2exp(t, t, M * l); mpz_sub_ui(t, t, 1);
+		mpz_set_ui(t, 1); mpz_mul_2exp(t, t, M << k); mpz_sub_ui(t, t, 1);
 		mpz_mul(z, x, y); mpz_mod(z, z, t);
 
-		SSG_mul_Mersenne(zp, x, y, k, l, M, n);
+		SSG_mul_Mersenne(zp, x, y, k, M, n);
 		mpz_mod(zp, zp, t);
 
 		std::cout << ((mpz_cmp(z, zp) == 0) ? "OK" : "Error") << std::endl;
