@@ -165,14 +165,18 @@ public:
 	static size_t get_size() { return _size; }
 
 	Mod() : _d(new uint64_t[_size]) {}
+	Mod(const Mod & rhs) : _d(new uint64_t[_size]) { std::cout << "bingo" << std::endl; }
 	virtual ~Mod() { delete[] _d; }
 
-	void get(uint64_t * const x) const
+	Mod & operator=(const Mod & rhs) { std::cout << "bingo" << std::endl; return *this; }
+
+	void get(uint64_t * const x, size_t & x_size) const
 	{
-		const size_t size = _size;
 		const uint64_t * const d = _d;
 
+		size_t size = _size; while ((size != 0) && (d[size - 1] == 0)) --size;
 		for (size_t i = 0; i < size; ++i) x[i] = d[i];
+		x_size = size;
 	}
 
 	void set(const uint64_t * const x, const size_t x_size)
@@ -220,122 +224,160 @@ public:
 size_t Mod::_size = 0, Mod::_n = 0;
 uint64_t * Mod::_buf = nullptr;
 
-static void mul(const size_t m, size_t e, Mod * const x, Mod * const y)
+class SSG
 {
-	if (m == 0) { x[0] *= y[0]; return; }
+private:
+	const unsigned int _k;
+	const size_t _M, _n, _l;
+	Mod * const _x = nullptr;
+	Mod * const _y = nullptr;
 
-	const size_t e_2 = e / 2;	// previous root is r^2 = 2^e, new root r = 2^{e/2}
-
-	for (size_t k = 0; k < m; ++k) { x[k + 1 * m] <<= e_2; x[k + 0 * m].add_sub(x[k + 1 * m]); }
-	for (size_t k = 0; k < m; ++k) { y[k + 1 * m] <<= e_2; y[k + 0 * m].add_sub(y[k + 1 * m]); }
-
-	mul(m / 2, e_2, &x[0 * m], &y[0 * m]);					//  r = 2^{e/2}
-	mul(m / 2, e_2 + Mod::get_n(), &x[1 * m], &y[1 * m]);	// -r = 2^{e/2 + n}
-
-	const size_t me_2 = Mod::get_n() - e_2;		// 2^n = -1 then r^-1 = 2^-{e/2} = -2^{n - e/2}
-
-	for (size_t k = 0; k < m; ++k) { x[k + 0 * m].add_subr(x[k + 1 * m]); x[k + 1 * m] <<= me_2; }
-}
-
-static void mul_Mersenne(const size_t m, Mod * const x, Mod * const y)
-{
-	if (m == 0) { x[0] *= y[0]; return; }
-
-	// We have e = 0: r = 1
-
-	for (size_t k = 0; k < m; ++k) x[k + 0 * m].add_sub(x[k + 1 * m]);
-	for (size_t k = 0; k < m; ++k) y[k + 0 * m].add_sub(y[k + 1 * m]);
-
-	mul_Mersenne(m / 2, &x[0 * m], &y[0 * m]);		// root of 1 is still 1
-	mul(m / 2, Mod::get_n(), &x[1 * m], &y[1 * m]);	// root is -1 = 2^n
-
-	for (size_t k = 0; k < m; ++k) x[k + 0 * m].add_sub(x[k + 1 * m]);
-}
-
-static double get_param(const size_t N, const unsigned int k, size_t & M, size_t & n)
-{
-	// See Pierrick Gaudry, Alexander Kruppa, Paul Zimmermann.
-	// A GMP-based implementation of Schönhage-Strassen's large integer multiplication algorithm.
-	// ISSAC 2007, Jul 2007, Waterloo, Ontario, Canada. pp.167-174, ⟨10.1145/1277548.1277572⟩. ⟨inria-00126462v2⟩
-	const size_t K = size_t(1) << k;
-	M = (N % K == 0) ? N / K : N / K + 1;
-	const size_t t = 2 * M + k;
-	n = t; if (n % K != 0) n = (n / K + 1) * K;
-	return	double(t) / n;	// efficiency
-}
-
-static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n)
-{
-	k = 0;
-	for (unsigned int i = 1; true; ++i)
+	// v is a vector of l M-bit slices of x
+	void set_vector(Mod * const v, const uint64_t * const x, const size_t size)
 	{
-		size_t M_i, n_i; const double efficiency = get_param(N, i, M_i, n_i);
-		if (n_i % 64 != 0) continue;
-		const size_t K_i = size_t(1) << i;
-		if (K_i > 2 * std::sqrt(M_i * K_i)) break;
-		if (efficiency > 0.8) k = i;
+		const size_t l = _l, M_64 = _M / 64, M_mod64 = _M % 64;
+
+		uint64_t * const t = new uint64_t[size];
+		for (size_t i = 0; i < size; ++i) t[i] = x[i];
+
+		uint64_t * const r = new uint64_t[M_64 + 1];
+
+		for (size_t i = 0; i < l; ++i)
+		{
+			for (size_t j = 0; j < M_64; ++j) r[j] = t[j];
+			r[M_64] = (t[M_64] & ((size_t(1) << M_mod64) - 1));
+			v[i].set(r, M_64 + 1);
+
+			for (size_t j = 0; j < size - M_64; ++j) t[j] = t[j + M_64];
+			for (size_t j = size - M_64; j < size; ++j) t[j] = 0;
+			if (M_mod64 != 0) mpn_rshift(t, t, size, M_mod64);
+		}
+
+		delete[] t;
+		delete[] r;
 	}
 
-	const double efficiency = get_param(N, k, M, n);
- 	std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << (M << k) << ", M = " << M
-		<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
-}
-
-// v is a vector of l M-bit part of x
-static void fill_vector(Mod * const v, const size_t l, const uint64_t * const x, const size_t size, const size_t M)
-{
-	const size_t M_64 = M / 64, M_mod64 = M % 64;
-
-	uint64_t * const t = new uint64_t[size];
-	for (size_t i = 0; i < size; ++i) t[i] = x[i];
-
-	uint64_t * const r = new uint64_t[M_64 + 1];
-
-	for (size_t i = 0; i < l; ++i)
+	// Compute sum of the l slices
+	void get_vector(uint64_t * const x, const size_t size, const Mod * const v)
 	{
-		for (size_t j = 0; j < M_64; ++j) r[j] = t[j];
-		r[M_64] = (t[M_64] & ((size_t(1) << M_mod64) - 1));
-		v[i].set(r, M_64 + 1);
+		const size_t l = _l, M_64 = _M / 64, M_mod64 = _M % 64;
 
-		for (size_t j = 0; j < size - M_64; ++j) t[j] = t[j + M_64];
-		for (size_t j = size - M_64; j < size; ++j) t[j] = 0;
-		if (M_mod64 != 0) mpn_rshift(t, t, size, M_mod64);
+		for (size_t i = 0; i < size; ++i) x[i] = 0;
+		uint64_t * const c = new uint64_t[Mod::get_size()];
+		for (size_t i = 0; i < l; ++i)
+		{
+			for (size_t j = size - 1; j >= M_64; --j) x[j] = x[j - M_64];
+			for (size_t j = 0; j < M_64; ++j) x[j] = 0;
+			if (M_mod64 != 0) mpn_lshift(x, x, size, M_mod64);
+			size_t c_size; v[l - i - 1].get(c, c_size);
+			mpn_add(x, x, size, c, c_size);
+		}
+		delete[] c;
 	}
 
-	delete[] t;
-	delete[] r;
-}
+	static double get_param(const size_t N, const unsigned int k, size_t & M, size_t & n)
+	{
+		// See Pierrick Gaudry, Alexander Kruppa, Paul Zimmermann.
+		// A GMP-based implementation of Schönhage-Strassen's large integer multiplication algorithm.
+		// ISSAC 2007, Jul 2007, Waterloo, Ontario, Canada. pp.167-174, ⟨10.1145/1277548.1277572⟩. ⟨inria-00126462v2⟩
+		const size_t K = size_t(1) << k;
+		M = (N % K == 0) ? N / K : N / K + 1;
+		const size_t t = 2 * M + k;
+		n = t; if (n % K != 0) n = (n / K + 1) * K;
+		return	double(t) / n;	// efficiency
+	}
+
+	void mul(const size_t m, const size_t k, const size_t e)
+	{
+		Mod * const x = &_x[k];
+		Mod * const y = &_y[k];
+
+		if (m == 0) { x[0] *= y[0]; return; }
+
+		const size_t e_2 = e / 2;	// previous root is r^2 = 2^e, new root r = 2^{e/2}
+
+		for (size_t i = 0; i < m; ++i) { x[i + 1 * m] <<= e_2; x[i + 0 * m].add_sub(x[i + 1 * m]); }
+		for (size_t i = 0; i < m; ++i) { y[i + 1 * m] <<= e_2; y[i + 0 * m].add_sub(y[i + 1 * m]); }
+
+		mul(m / 2, k + 0 * m, e_2);			//  r = 2^{e/2}
+		mul(m / 2, k + 1 * m, e_2 + _n);	// -r = 2^{e/2 + n}
+
+		const size_t me_2 = _n - e_2;		// 2^n = -1 then r^-1 = 2^-{e/2} = -2^{n - e/2}
+
+		for (size_t i = 0; i < m; ++i) { x[i + 0 * m].add_subr(x[i + 1 * m]); x[i + 1 * m] <<= me_2; }
+	}
+
+	void mul_Mersenne(const size_t m, const size_t k)
+	{
+		Mod * const x = &_x[k];
+		Mod * const y = &_y[k];
+
+		if (m == 0) { x[0] *= y[0]; return; }
+
+		// We have e = 0: r = 1
+
+		for (size_t i = 0; i < m; ++i) x[i + 0 * m].add_sub(x[i + 1 * m]);
+		for (size_t i = 0; i < m; ++i) y[i + 0 * m].add_sub(y[i + 1 * m]);
+
+		mul_Mersenne(m / 2, k + 0 * m);		// root of 1 is still 1
+		mul(m / 2, k + 1 * m, _n);			// root is -1 = 2^n
+
+		for (size_t i = 0; i < m; ++i) x[i + 0 * m].add_sub(x[i + 1 * m]);
+	}
+
+public:
+	SSG(const unsigned int k, const size_t M, const size_t n) : _k(k), _M(M), _n(n), _l(size_t(1) << k), _x(new Mod[_l]), _y(new Mod[_l]) {}
+
+	virtual ~SSG()
+	{ delete[] _x; delete[] _y; }
+
+	void set_x(const uint64_t * const x, const size_t size) { set_vector(_x, x, size); }
+	void set_y(const uint64_t * const y, const size_t size) { set_vector(_y, y, size); }
+
+	void get_x(uint64_t * const x, const size_t size) {get_vector(x, size, _x); }
+
+	void mul()
+	{
+		const size_t l = _l;
+
+		mul_Mersenne(l / 2, 0);	//_x, _y);	// top-most recursion level
+
+		// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+		Mod * const x = _x;
+		const size_t s = _n - _k;
+		for (size_t i = 0; i < l; ++i) { x[i] <<= s; x[i].neg(); }
+	}
+
+	static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n)
+	{
+		k = 0;
+		for (unsigned int i = 1; true; ++i)
+		{
+			size_t M_i, n_i; const double efficiency = get_param(N, i, M_i, n_i);
+			if (n_i % 64 != 0) continue;
+			const size_t K_i = size_t(1) << i;
+			if (K_i > 2 * std::sqrt(M_i * K_i)) break;
+			if (efficiency > 0.8) k = i;
+		}
+
+		const double efficiency = get_param(N, k, M, n);
+		std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << (M << k) << ", M = " << M
+			<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
+	}
+};
 
 // Recursive Schönhage-Strassen-Gallot algorithm
 static void SSG_mul(uint64_t * const z, const uint64_t * const x, const size_t x_size, const uint64_t * const y, const size_t y_size)
 {
 	const size_t z_size = x_size + y_size;
-	unsigned int k = 0;	size_t M, n; get_best_param(64 * z_size, k, M, n);
-	const size_t l = size_t(1) << k;
+	unsigned int k = 0;	size_t M, n; SSG::get_best_param(64 * z_size, k, M, n);
 
 	Mod::set_n(n);	// modulo 2^n + 1
-
-	Mod a[l], b[l]; fill_vector(a, l, x, x_size, M); fill_vector(b, l, y, y_size, M);
-
-	mul_Mersenne(l / 2, a, b);	// top-most recursion level
-
-	// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
-	for (size_t i = 0; i < l; ++i) { a[i] <<= (n - k); a[i].neg(); }
-
-	// Compute sum of the l M-bit part of z
-	for (size_t i = 0; i < z_size; ++i) z[i] = 0;
-	const size_t M_64 = M / 64, M_mod64 = M % 64;
-	const size_t c_size = Mod::get_size();
-	uint64_t * const c = new uint64_t[c_size];
-	for (size_t i = 0; i < l; ++i)
-	{
-		for (size_t j = z_size - 1; j >= M_64; --j) z[j] = z[j - M_64];
-		for (size_t j = 0; j < M_64; ++j) z[j] = 0;
-		if (M_mod64 != 0) mpn_lshift(z, z, z_size, M_mod64);
-		a[l - i - 1].get(c);
-		mpn_add(z, z, z_size, c, c_size);
-	}
-	delete[] c;
+	SSG ssg(k, M, n);
+	ssg.set_x(x, x_size);
+	ssg.set_y(y, y_size);
+	ssg.mul();
+	ssg.get_x(z, z_size);
 }
 
 int main()

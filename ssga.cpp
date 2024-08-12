@@ -82,7 +82,7 @@ public:
 size_t Mod::_n = 0;
 mpz_t Mod::_F;
 
-static void mul(const size_t m, size_t e, Mod * const x, Mod * const y)
+static void mul(const size_t m, const size_t e, Mod * const x, Mod * const y)
 {
 	if (m == 0) { x[0] *= y[0]; return; }
 
@@ -168,7 +168,7 @@ static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t 
 		<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
 }
 
-// a is a vector of l M-bit part of x
+// a is a vector of l M-bit slices of x
 static void fill_vector(Mod * const a, const size_t l, const mpz_t & x, const size_t M)
 {
 	mpz_t t, r; mpz_inits(t, r, nullptr);
@@ -189,7 +189,7 @@ static void SSG_mul_Fermat(mpz_t & z, const mpz_t & x, const mpz_t & y, const un
 	// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
 	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
-	// Compute sum of the l M-bit part of z
+	// Compute sum of the l slices of z
 	mpz_t F, F_half, c; mpz_inits(F, F_half, c, nullptr);
 	mpz_set_ui(F, 1); mpz_mul_2exp(F, F, n); mpz_add_ui(F, F, 1);
 	mpz_div_2exp(F_half, F, 1);
@@ -218,7 +218,7 @@ static void SSG_mul_Mersenne(mpz_t & z, const mpz_t & x, const mpz_t & y, unsign
 	// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
 	for (size_t i = 0; i < l; ++i) a[i] = -(a[i] << (n - k));
 
-	// Compute sum of the l M-bit part of z
+	// Compute sum of the l slices of z
 	mpz_set_ui(z, 0); for (size_t i = 0; i < l; ++i) { mpz_mul_2exp(z, z, M); mpz_add(z, z, a[l - i - 1].get()); }
 }
 
