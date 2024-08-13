@@ -9,8 +9,10 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <stdexcept>
 #include <cmath>
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 #include <string>
+#include <chrono>
 
 #include <gmp.h>
 
@@ -201,44 +203,52 @@ private:
 	// v is a vector of l M-bit slices of x
 	void set_vector(ModVector & v, const uint64_t * const x, const size_t size)
 	{
-		const size_t l = _l, M_64 = _M / 64, M_mod64 = _M % 64;
+		const size_t M_64 = _M / 64, M_mask = (size_t(1) << (_M % 64)) - 1;
 
-		uint64_t * const t = new uint64_t[size];
-		for (size_t i = 0; i < size; ++i) t[i] = x[i];
+		uint64_t * const r = new uint64_t[M_64 + 2];
 
-		uint64_t * const r = new uint64_t[M_64 + 1];
-
-		for (size_t k = 0; k < l; ++k)
+		for (size_t k = 0, l = _l; k < l; ++k)
 		{
-			for (size_t i = 0; i < M_64; ++i) r[i] = t[i];
-			r[M_64] = (t[M_64] & ((size_t(1) << M_mod64) - 1));
-			v.set(k, r, M_64 + 1);
+			const size_t bit_index = k * _M, index = bit_index / 64;
 
-			for (size_t i = 0; i < size - M_64; ++i) t[i] = t[i + M_64];
-			for (size_t i = size - M_64; i < size; ++i) t[i] = 0;
-			if (M_mod64 != 0) mpn_rshift(t, t, size, M_mod64);
+			if (index < size)
+			{
+				const size_t left = size - index;
+				for (size_t i = 0, n = std::min(left, M_64 + 2); i < n; ++i) r[i] = x[index + i];
+				for (size_t i = left; i < M_64 + 2; ++i) r[i] = 0;
+
+				const size_t s = bit_index % 64;
+				if (s != 0) mpn_rshift(r, r, M_64 + 2, s);
+				r[M_64] &= M_mask;
+
+				v.set(k, r, M_64 + 1);
+			}
+			else v.set(k, r, 0);
 		}
 
-		delete[] t;
 		delete[] r;
 	}
 
 	// Compute sum of the l slices
 	void get_vector(uint64_t * const x, const size_t size, const ModVector & v)
 	{
-		const size_t l = _l, M_64 = _M / 64, M_mod64 = _M % 64;
-
 		for (size_t i = 0; i < size; ++i) x[i] = 0;
-		uint64_t * const c = new uint64_t[v.get_size()];
-		for (size_t k = 0; k < l; ++k)
+
+		uint64_t * const r = new uint64_t[v.get_size() + 1];
+
+		for (size_t k = 0, l = _l; k < l; ++k)
 		{
-			for (size_t i = size - 1; i >= M_64; --i) x[i] = x[i - M_64];
-			for (size_t i = 0; i < M_64; ++i) x[i] = 0;
-			if (M_mod64 != 0) mpn_lshift(x, x, size, M_mod64);
-			size_t c_size; v.get(l - k - 1, c, c_size);
-			mpn_add(x, x, size, c, c_size);
+			const size_t bit_index = k * _M, index = bit_index / 64, s = bit_index % 64;
+
+			size_t r_size; v.get(k, r, r_size);
+			if (r_size != 0)
+			{
+				if (s != 0) r[r_size] = mpn_lshift(r, r, r_size, s); else r[r_size] = 0;
+				mpn_add_n(&x[index], &x[index], r, r_size + 1);
+			}
 		}
-		delete[] c;
+
+		delete[] r;
 	}
 
 	static double get_param(const size_t N, const unsigned int k, size_t & M, size_t & n)
@@ -306,7 +316,7 @@ public:
 		for (size_t k = 0; k < l; ++k) { _x.lshift(k, s); _x.neg(k); }
 	}
 
-	static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n)
+	static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n, const bool verbose)
 	{
 		k = 0;
 		for (unsigned int i = 1; true; ++i)
@@ -315,20 +325,23 @@ public:
 			if (n_i % 64 != 0) continue;
 			const size_t K_i = size_t(1) << i;
 			if (K_i > 2 * std::sqrt(M_i * K_i)) break;
-			if (efficiency > 0.8) k = i;
+			if (efficiency > 0.9) k = i;
 		}
 
 		const double efficiency = get_param(N, k, M, n);
-		std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << (M << k) << ", M = " << M
-			<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
+		if (verbose)
+		{
+			std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << (M << k) << ", M = " << M
+				<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
+		}
 	}
 };
 
 // Recursive Schönhage-Strassen-Gallot algorithm
-static void SSG_mul(uint64_t * const z, const uint64_t * const x, const size_t x_size, const uint64_t * const y, const size_t y_size)
+static void SSG_mul(uint64_t * const z, const uint64_t * const x, const size_t x_size, const uint64_t * const y, const size_t y_size, const bool verbose)
 {
 	const size_t z_size = x_size + y_size;
-	unsigned int k = 0;	size_t M, n; SSG::get_best_param(64 * z_size, k, M, n);
+	unsigned int k = 0;	size_t M, n; SSG::get_best_param(64 * z_size, k, M, n, verbose);
 
 	SSG ssg(k, M, n);
 	ssg.set_x(x, x_size);
@@ -339,10 +352,13 @@ static void SSG_mul(uint64_t * const z, const uint64_t * const x, const size_t x
 
 int main()
 {
-	std::cout << std::endl << "Check SSG algorithm:" << std::endl;
+	std::cout << std::fixed << std::setprecision(3) << std::endl << "Check SSG algorithm:" << std::endl;
 	bool parity = true;
-	for (size_t N = 13761; N < 50000000ull; N *= 3)
+	const size_t N_min = 10000 * 64, N_max = 1000000000ull;
+	for (size_t N = N_min; N < N_max; N *= 3)
 	{
+		const size_t count = std::max(N_max / N, size_t(1));
+
 		// Generate two random numbers
 		const size_t x_bitcount = 4 * N / 5, y_bitcount = N / 5;
 		const size_t x_size = x_bitcount / 64 + 1, y_size = y_bitcount / 64 + 1, z_size = x_size + y_size;
@@ -355,10 +371,16 @@ int main()
 		parity = !parity;
 
 		// z = x * y
-		mpn_mul(z, x, x_size, y, y_size);
-		SSG_mul(zp, x, x_size, y, y_size);
+		const auto start_mpn = std::chrono::high_resolution_clock::now();
+		for (size_t i = 0; i < count; ++i) mpn_mul(z, x, x_size, y, y_size);
+		const double elapsed_time_mpn = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_mpn).count() / count;
 
-		std::cout << ((mpn_cmp(z, zp, z_size) == 0) ? "OK" : "Error") << std::endl;
+		const auto start_ssg = std::chrono::high_resolution_clock::now();
+		for (size_t i = 0; i < count; ++i) SSG_mul(zp, x, x_size, y, y_size, i == 0);
+		const double elapsed_time_ssg = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_ssg).count() / count;
+
+		std::cout << ((mpn_cmp(z, zp, z_size) == 0) ? "OK" : "Error") <<
+			", mpn: " << elapsed_time_mpn << " sec, SSG: " << elapsed_time_ssg << " sec (" << int(100 * elapsed_time_ssg / elapsed_time_mpn) << "%)." << std::endl;
 
 		delete[] x;
 		delete[] y;
