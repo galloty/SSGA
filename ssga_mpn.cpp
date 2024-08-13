@@ -16,7 +16,7 @@ Please give feedback to the authors if improvement is realized. It is distribute
 
 #include <gmp.h>
 
-// modulo 2^n + 1
+// A vector of l elements, operation are modulo 2^n + 1
 class ModVector
 {
 private:
