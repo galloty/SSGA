@@ -184,7 +184,7 @@ public:
 		_mod_F(d_i);
 	}
 
-	void mul(const ModVector & rhs, const size_t i)
+	void negacyclic(const ModVector & rhs, const size_t i)
 	{
 		uint64_t * const d_i = &_d[i * _size];
 		mpn_mul_n(_buf, d_i, &rhs._d[i * _size], _size);
@@ -265,7 +265,7 @@ private:
 
 	void mul(const size_t m, const size_t k, const size_t e)
 	{
-		if (m == 0) { _x.mul(_y, k); return; }
+		if (m == 0) { _x.negacyclic(_y, k); return; }
 
 		const size_t e_2 = e / 2;	// previous root is r^2 = 2^e, new root r = 2^{e/2}
 
@@ -282,7 +282,7 @@ private:
 
 	void mul_Mersenne(const size_t m, const size_t k)
 	{
-		if (m == 0) { _x.mul(_y, k); return; }
+		if (m == 0) { _x.negacyclic(_y, k); return; }
 
 		// We have e = 0: r = 1
 
@@ -329,11 +329,7 @@ public:
 		}
 
 		const double efficiency = get_param(N, k, M, n);
-		if (verbose)
-		{
-			std::cout << "N = " << N << ", sqrt(N) = " << int(std::sqrt(N)) << ", N' = " << (M << k) << ", M = " << M
-				<< ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
-		}
+		if (verbose) std::cout << ", N' = " << (M << k) << ", M = " << M << ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
 	}
 };
 
@@ -354,10 +350,11 @@ int main()
 {
 	std::cout << std::fixed << std::setprecision(3) << std::endl << "Check SSG algorithm:" << std::endl;
 	bool parity = true;
-	const size_t N_min = 10000 * 64, N_max = 1000000000ull;
-	for (size_t N = N_min; N < N_max; N *= 3)
+	for (unsigned int d = 3; d <= 9; ++d)
 	{
-		const size_t count = std::max(N_max / N, size_t(1));
+		const size_t N = size_t(std::pow(10, d) * std::log2(10));
+
+		std::cout << "10^" << d << " digits, N = " << N;
 
 		// Generate two random numbers
 		const size_t x_bitcount = 4 * N / 5, y_bitcount = N / 5;
@@ -371,16 +368,20 @@ int main()
 		parity = !parity;
 
 		// z = x * y
-		const auto start_mpn = std::chrono::high_resolution_clock::now();
-		for (size_t i = 0; i < count; ++i) mpn_mul(z, x, x_size, y, y_size);
-		const double elapsed_time_mpn = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_mpn).count() / count;
+		mpn_mul(z, x, x_size, y, y_size);
+		SSG_mul(zp, x, x_size, y, y_size, true);
 
-		const auto start_ssg = std::chrono::high_resolution_clock::now();
-		for (size_t i = 0; i < count; ++i) SSG_mul(zp, x, x_size, y, y_size, i == 0);
-		const double elapsed_time_ssg = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_ssg).count() / count;
+		// const size_t count = std::max(1000000000 / N, size_t(1));
+		// const auto start_mpn = std::chrono::high_resolution_clock::now();
+		// for (size_t i = 0; i < count; ++i) mpn_mul(z, x, x_size, y, y_size);
+		// const double elapsed_time_mpn = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_mpn).count() / count;
+		// const auto start_ssg = std::chrono::high_resolution_clock::now();
+		// for (size_t i = 0; i < count; ++i) SSG_mul(zp, x, x_size, y, y_size, i == 0);
+		// const double elapsed_time_ssg = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_ssg).count() / count;
 
-		std::cout << ((mpn_cmp(z, zp, z_size) == 0) ? "OK" : "Error") <<
-			", mpn: " << elapsed_time_mpn << " sec, SSG: " << elapsed_time_ssg << " sec (" << int(100 * elapsed_time_ssg / elapsed_time_mpn) << "%)." << std::endl;
+		std::cout << ((mpn_cmp(z, zp, z_size) == 0) ? "OK" : "Error")
+			// << ", mpn: " << elapsed_time_mpn << " sec, SSG: " << elapsed_time_ssg << " sec (" << int(100 * elapsed_time_ssg / elapsed_time_mpn) << "%)"
+			<< "." << std::endl;
 
 		delete[] x;
 		delete[] y;
