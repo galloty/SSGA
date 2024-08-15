@@ -24,6 +24,7 @@ private:
 	uint64_t * const _buf;
 	uint64_t * const _d;
 
+// #ifndef __x86_64
 	static uint64_t _addc(const uint64_t x, const uint64_t y, uint64_t & carry)
 	{
 		const __uint128_t t = x + __uint128_t(y) + carry;
@@ -37,6 +38,7 @@ private:
 		borrow = int64_t(t >> 64);
 		return uint64_t(t);
 	}
+// #endif
 
 	void _get(const uint64_t * const x, uint64_t * const dst, size_t & dst_size) const
 	{
@@ -53,18 +55,175 @@ private:
 
 	bool _add_sub(uint64_t * const x, uint64_t * const y) const
 	{
-		uint64_t carry = 0; int64_t borrow = 0;
-		for (size_t i = 0, size = _size; i < size; ++i)
-		{
-			const uint64_t x_i = x[i], y_i = y[i];
-			x[i] = _addc(x_i, y_i, carry);
-			y[i] = _subb(x_i, y_i, borrow);
-		}
+#ifdef __x86_64
+		const size_t size_4 = _size / 4;	// size = 4 * size_4 + 1
+		char borrow = 0;
+		asm volatile
+		(
+			"movq	%[size_4], %%rcx\n\t"
+			"movq	%[x], %%rsi\n\t"
+			"movq	%[y], %%rdi\n\t"
+			"xorq	%%rax, %%rax\n\t"		// carry of sbb
+			"xorq	%%rdx, %%rdx\n\t"		// carry of adc
+			"clc\n\t"
+
+			"loop%=:\n\t"
+			"neg	%%al\n\t"				// CF is set to 0 if dl = 0, otherwise it is set to 1
+
+			"movq	(%%rsi), %%rbx\n\t"
+			"movq	(%%rdi), %%r9\n\t"
+			"movq	%%rbx, %%r8\n\t"		// r8 = x[0], r9 = y[0]
+			"sbbq	%%r9, %%rbx\n\t"
+			"movq	%%rbx, (%%rdi)\n\t"		// y[i] = rbx = x[i] - y[i]
+
+			"movq	8(%%rsi), %%rbx\n\t"
+			"movq	8(%%rdi), %%r11\n\t"
+			"movq	%%rbx, %%r10\n\t"		// r10 = x[1], r11 = y[1]
+			"sbbq	%%r11, %%rbx\n\t"
+			"movq	%%rbx, 8(%%rdi)\n\t"
+
+			"movq	16(%%rsi), %%rbx\n\t"
+			"movq	16(%%rdi), %%r13\n\t"
+			"movq	%%rbx, %%r12\n\t"		// r12 = x[2], r13 = y[2]
+			"sbbq	%%r13, %%rbx\n\t"
+			"movq	%%rbx, 16(%%rdi)\n\t"
+
+			"movq	24(%%rsi), %%rbx\n\t"
+			"movq	24(%%rdi), %%r15\n\t"
+			"movq	%%rbx, %%r14\n\t"		// r14 = x[3], r15 = y[3]
+			"sbbq	%%r15, %%rbx\n\t"
+			"movq	%%rbx, 24(%%rdi)\n\t"
+
+			"setc	%%al\n\t"
+			"neg	%%dl\n\t"
+
+			"adcq	%%r9, %%r8\n\t"
+			"movq	%%r8, (%%rsi)\n\t"		// x[i] = x[i] + y[i]
+			"adcq	%%r11, %%r10\n\t"
+			"movq	%%r10, 8(%%rsi)\n\t"
+			"adcq	%%r13, %%r12\n\t"
+			"movq	%%r12, 16(%%rsi)\n\t"
+			"adcq	%%r15, %%r14\n\t"
+			"movq	%%r14, 24(%%rsi)\n\t"
+
+			"setc	%%dl\n\t"
+
+			"subq	$1, %%rcx\n\t"
+			"addq	$32, %%rsi\n\t"
+			"addq	$32, %%rdi\n\t"
+			"testq	%%rcx, %%rcx\n\t"
+			"jne	loop%=\n\t"
+
+			"neg	%%al\n\t"
+
+			"movq	(%%rsi), %%rbx\n\t"
+			"movq	(%%rdi), %%r9\n\t"
+			"movq	%%rbx, %%r8\n\t"
+			"sbbq	%%r9, %%rbx\n\t"
+			"movq	%%rbx, (%%rdi)\n\t"
+
+			"setc	%[borrow]\n\t"
+			"neg	%%dl\n\t"
+
+			"adcq	%%r9, %%r8\n\t"
+			"movq	%%r8, (%%rsi)\n\t"
+
+			: [borrow] "=rm" (borrow)
+			: [x] "rm" (x), [y] "rm" (y), [size_4] "rm" (size_4)
+			: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "cc", "memory"
+		);
+#else
+	uint64_t carry = 0; int64_t borrow = 0;
+	for (size_t i = 0, size = _size; i < size; ++i)
+	{
+		const uint64_t x_i = x[i], y_i = y[i];
+		x[i] = _addc(x_i, y_i, carry);
+		y[i] = _subb(x_i, y_i, borrow);
+	}
+#endif
 		return (borrow != 0);
 	}
 
 	bool _add_subr(uint64_t * const x, uint64_t * const y) const
 	{
+#ifdef __x86_64
+		const size_t size_4 = _size / 4;	// size = 4 * size_4 + 1
+		char borrow = 0;
+		asm volatile
+		(
+			"movq	%[size_4], %%rcx\n\t"
+			"movq	%[x], %%rsi\n\t"
+			"movq	%[y], %%rdi\n\t"
+			"xorq	%%rax, %%rax\n\t"		// carry of sbb
+			"xorq	%%rdx, %%rdx\n\t"		// carry of adc
+			"clc\n\t"
+
+			"loop%=:\n\t"
+			"neg	%%al\n\t"				// CF is set to 0 if dl = 0, otherwise it is set to 1
+
+			"movq	(%%rsi), %%r8\n\t"
+			"movq	(%%rdi), %%rbx\n\t"
+			"movq	%%rbx, %%r9\n\t"		// r8 = x[0], r9 = y[0]
+			"sbbq	%%r8, %%rbx\n\t"
+			"movq	%%rbx, (%%rdi)\n\t"		// y[i] = rbx = y[i] - x[i]
+
+			"movq	8(%%rsi), %%r10\n\t"
+			"movq	8(%%rdi), %%rbx\n\t"
+			"movq	%%rbx, %%r11\n\t"		// r10 = x[1], r11 = y[1]
+			"sbbq	%%r10, %%rbx\n\t"
+			"movq	%%rbx, 8(%%rdi)\n\t"
+
+			"movq	16(%%rsi), %%r12\n\t"
+			"movq	16(%%rdi), %%rbx\n\t"
+			"movq	%%rbx, %%r13\n\t"		// r12 = x[2], r13 = y[2]
+			"sbbq	%%r12, %%rbx\n\t"
+			"movq	%%rbx, 16(%%rdi)\n\t"
+
+			"movq	24(%%rsi), %%r14\n\t"
+			"movq	24(%%rdi), %%rbx\n\t"
+			"movq	%%rbx, %%r15\n\t"		// r14 = x[3], r15 = y[3]
+			"sbbq	%%r14, %%rbx\n\t"
+			"movq	%%rbx, 24(%%rdi)\n\t"
+
+			"setc	%%al\n\t"
+			"neg	%%dl\n\t"
+
+			"adcq	%%r9, %%r8\n\t"
+			"movq	%%r8, (%%rsi)\n\t"		// x[i] = x[i] + y[i]
+			"adcq	%%r11, %%r10\n\t"
+			"movq	%%r10, 8(%%rsi)\n\t"
+			"adcq	%%r13, %%r12\n\t"
+			"movq	%%r12, 16(%%rsi)\n\t"
+			"adcq	%%r15, %%r14\n\t"
+			"movq	%%r14, 24(%%rsi)\n\t"
+
+			"setc	%%dl\n\t"
+
+			"subq	$1, %%rcx\n\t"
+			"addq	$32, %%rsi\n\t"
+			"addq	$32, %%rdi\n\t"
+			"testq	%%rcx, %%rcx\n\t"
+			"jne	loop%=\n\t"
+
+			"neg	%%al\n\t"
+
+			"movq	(%%rsi), %%r8\n\t"
+			"movq	(%%rdi), %%rbx\n\t"
+			"movq	%%rbx, %%r9\n\t"
+			"sbbq	%%r8, %%rbx\n\t"
+			"movq	%%rbx, (%%rdi)\n\t"
+
+			"setc	%[borrow]\n\t"
+			"neg	%%dl\n\t"
+
+			"adcq	%%r9, %%r8\n\t"
+			"movq	%%r8, (%%rsi)\n\t"
+
+			: [borrow] "=rm" (borrow)
+			: [x] "rm" (x), [y] "rm" (y), [size_4] "rm" (size_4)
+			: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "cc", "memory"
+		);
+#else
 		uint64_t carry = 0; int64_t borrow = 0;
 		for (size_t i = 0, size = _size; i < size; ++i)
 		{
@@ -72,6 +231,7 @@ private:
 			x[i] = _addc(x_i, y_i, carry);
 			y[i] = _subb(y_i, x_i, borrow);
 		}
+#endif
 		return (borrow != 0);
 	}
 
@@ -260,6 +420,7 @@ private:
 		M = (N % K == 0) ? N / K : N / K + 1;
 		const size_t t = 2 * M + k;
 		n = t; if (n % K != 0) n = (n / K + 1) * K;
+		while (n % (64 * 4) != 0) n += K;
 		return	double(t) / n;	// efficiency
 	}
 
@@ -322,14 +483,13 @@ public:
 		for (unsigned int i = 1; true; ++i)
 		{
 			size_t M_i, n_i; const double efficiency = get_param(N, i, M_i, n_i);
-			if (n_i % 64 != 0) continue;
 			const size_t K_i = size_t(1) << i;
 			if (K_i > 2 * std::sqrt(M_i * K_i)) break;
-			if (efficiency > 0.9) k = i;
-		}
+			if (efficiency > 0.95) k = i;
+	}
 
 		const double efficiency = get_param(N, k, M, n);
-		if (verbose) std::cout << ", N' = " << (M << k) << ", M = " << M << ", k = " << k << ", n = " << n << ", efficiency = " << efficiency << ", ";
+		if (verbose) std::cout << ", N' = " << (M << k) << ", M = " << M << ", k = " << k << ", n = 64 * " << n / 64 << ", efficiency = " << efficiency << ", ";
 	}
 };
 
@@ -350,7 +510,7 @@ int main()
 {
 	std::cout << std::fixed << std::setprecision(3) << std::endl << "Check SSG algorithm:" << std::endl;
 	bool parity = true;
-	for (unsigned int d = 3; d <= 9; ++d)
+	for (unsigned int d = 4; d <= 9; ++d)
 	{
 		const size_t N = size_t(std::pow(10, d) * std::log2(10));
 
@@ -368,19 +528,16 @@ int main()
 		parity = !parity;
 
 		// z = x * y
-		mpn_mul(z, x, x_size, y, y_size);
-		SSG_mul(zp, x, x_size, y, y_size, true);
-
-		// const size_t count = std::max(1000000000 / N, size_t(1));
-		// const auto start_mpn = std::chrono::high_resolution_clock::now();
-		// for (size_t i = 0; i < count; ++i) mpn_mul(z, x, x_size, y, y_size);
-		// const double elapsed_time_mpn = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_mpn).count() / count;
-		// const auto start_ssg = std::chrono::high_resolution_clock::now();
-		// for (size_t i = 0; i < count; ++i) SSG_mul(zp, x, x_size, y, y_size, i == 0);
-		// const double elapsed_time_ssg = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_ssg).count() / count;
+		const size_t count = std::max(1000000000 / N, size_t(1));
+		const auto start_mpn = std::chrono::high_resolution_clock::now();
+		for (size_t i = 0; i < count; ++i) mpn_mul(z, x, x_size, y, y_size);
+		const double elapsed_time_mpn = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_mpn).count() / count;
+		const auto start_ssg = std::chrono::high_resolution_clock::now();
+		for (size_t i = 0; i < count; ++i) SSG_mul(zp, x, x_size, y, y_size, i == 0);
+		const double elapsed_time_ssg = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start_ssg).count() / count;
 
 		std::cout << ((mpn_cmp(z, zp, z_size) == 0) ? "OK" : "Error")
-			// << ", mpn: " << elapsed_time_mpn << " sec, SSG: " << elapsed_time_ssg << " sec (" << int(100 * elapsed_time_ssg / elapsed_time_mpn) << "%)"
+			<< ", mpn: " << elapsed_time_mpn << " sec, SSG: " << elapsed_time_ssg << " sec (" << int(100 * elapsed_time_ssg / elapsed_time_mpn) << "%)"
 			<< "." << std::endl;
 
 		delete[] x;
