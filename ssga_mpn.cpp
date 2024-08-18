@@ -243,6 +243,20 @@ private:
 		return true;
 	}
 
+	// y = x << s, 0 <= s < 64
+	finline static void _lshift(uint64_t * const y, const uint64_t * const x, const size_t size, const unsigned int s)
+	{
+		if (s > 0)
+		{
+			uint64_t prev = x[0]; y[0] = prev << s;
+			for (size_t i = 1; i < size; ++i)
+			{
+				const uint64_t x_i = x[i]; y[i] = (x_i << s) | (prev >> (64 - s)); prev = x_i;
+			}
+		}
+		else for (size_t i = 0; i < size; ++i) y[i] = x[i];
+	}
+
 	// x ?>= 2^n + 1
 	finline static bool _ge_F(const uint64_t * const x, const size_t size)
 	{
@@ -329,42 +343,17 @@ private:
 #endif
 	}
 
-	// y = x << s, y != x, s / 64 < x_size
-	finline static void _lshift(uint64_t * const y, const size_t y_size, const uint64_t * const x, const size_t x_size, const size_t s)
-	{
-		const size_t s_64 = s / 64; const unsigned int s_mod64 = s % 64;
-		for (size_t i = 0; i < s_64; ++i) y[i] = 0;
-		if (s_mod64 != 0)
-		{
-			uint64_t prev = x[0];
-			y[s_64] = prev << s_mod64;
-			for (size_t i = 1; i < x_size; ++i)
-			{
-				const uint64_t x_i = x[i];
-				y[s_64 + i] = (x_i << s_mod64) | (prev >> (64 - s_mod64));
-				prev = x_i;
-			}
-			y[s_64 + x_size] = prev >> (64 - s);
-		}
-		else
-		{
-			for (size_t i = 0; i < x_size; ++i) y[s_64 + i] = x[i];
-			y[s_64 + x_size] = 0;
-		}
-		for (size_t i = s_64 + x_size + 1; i < y_size; ++i) y[i] = 0;
-	}
-
-	// x = buf (mod 2^n + 1)
-	finline static void _mod_F(uint64_t * const x, const size_t size, const uint64_t * const buf)
+	// x = y (mod 2^n + 1)
+	finline static void _mod_F(uint64_t * const x, const size_t size, const uint64_t * const y)
 	{
 #ifdef __x86_64
 		char borrow = 0;
 		asm volatile
 		(
 			"movq	%[size], %%rcx\n\t"
-			"movq	%[buf], %%rsi\n\t"
+			"movq	%[y], %%rsi\n\t"
 			"movq	%[x], %%rdi\n\t"
-			"leaq	-8(%%rsi,%%rcx,8), %%rbx\n\t"	// buf[size - 1]
+			"leaq	-8(%%rsi,%%rcx,8), %%rbx\n\t"	// y[size - 1]
 			"shrq	$2,	%%rcx\n\t"					// size = 4 * size_4 + 1
 			"clc\n\t"
 
@@ -396,16 +385,106 @@ private:
 			"setc	%[borrow]\n\t"
 
 			: [borrow] "=rm" (borrow)
-			: [x] "rm" (x), [buf] "rm" (buf), [size] "rm" (size)
+			: [x] "rm" (x), [y] "rm" (y), [size] "rm" (size)
 			: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "cc", "memory"
 		);
 #else
-		// buf mod 2^n - buf / 2^n
+		// y mod 2^n - y / 2^n
 	 	int64_t borrow = 0;
-	 	for (size_t i = 0; i < size - 1; ++i) x[i] = _subb(buf[i], buf[size - 1 + i], borrow);
-		x[size - 1] = _subb(0, buf[2 * size - 2], borrow);
+	 	for (size_t i = 0; i < size - 1; ++i) x[i] = _subb(y[i], y[size - 1 + i], borrow);
+		x[size - 1] = _subb(0, y[2 * size - 2], borrow);
 #endif
 	 	if (borrow != 0) _add_F(x, size);
+	}
+
+	// y = x << (64 * s_64) (mod 2^n + 1), s_64 < x_size - 1
+	finline static void _lshift_mod_F(uint64_t * const y, const uint64_t * const x, const size_t size, const size_t s_64)
+	{
+		if (s_64 == 0)
+		{
+			const uint64_t x_0 = x[0], x_e = x[size - 1];
+			y[0] = x_0 - x_e;
+			for (size_t i = 1; i < size - 1; ++i) y[i] = x[i];
+			y[size - 1] = 0;
+			if (x_0 < x_e)	// borrow
+			{
+				for (size_t i = 1; i < size; ++i)
+				{
+					const uint64_t y_i = y[i]; y[i] = y_i - 1;
+					if (y_i != 0) return;
+				}
+				_add_F(y, size);
+			}
+			return;
+		}
+
+#ifdef __x86_64
+		char borrow = 0;
+		asm volatile
+		(
+			"movq	%[size], %%rbx\n\t"
+			"movq	%[s_64], %%rcx\n\t"
+			"subq	%%rcx, %%rbx\n\t"
+			"decq	%%rbx\n\t"				// size - s_64 - 1
+
+			"movq	%[x], %%rsi\n\t"
+			"movq	%[y], %%rdi\n\t"
+			"xorq	%%rdx, %%rdx\n\t"
+			"clc\n\t"
+
+			"loopa%=:\n\t"
+			"movq	%%rdx, %%rax\n\t"
+			"sbbq	(%%rsi,%%rbx,8), %%rax\n\t"
+			"movq	%%rax, (%%rdi)\n\t"
+
+			"leaq	8(%%rsi), %%rsi\n\t"
+			"leaq	8(%%rdi), %%rdi\n\t"
+			"decq	%%rcx\n\t"
+			"jnz	loopa%=\n\t"
+
+			"movq	%%rbx, %%rcx\n\t"
+			"movq	(%%rsi,%%rbx,8), %%rbx\n\t"
+			"movq	%[x], %%rsi\n\t"
+			"movq	(%%rsi), %%rax\n\t"
+			"sbbq	%%rbx, %%rax\n\t"
+			"movq	%%rax, (%%rdi)\n\t"
+
+			"leaq	8(%%rsi), %%rsi\n\t"
+			"leaq	8(%%rdi), %%rdi\n\t"
+
+			"decq	%%rcx\n\t"
+			"jz		end%=\n\t"
+
+			"loopb%=:\n\t"
+			"movq	(%%rsi), %%rax\n\t"
+			"sbbq	%%rdx, %%rax\n\t"
+			"movq	%%rax, (%%rdi)\n\t"
+
+			"leaq	8(%%rsi), %%rsi\n\t"
+			"leaq	8(%%rdi), %%rdi\n\t"
+			"decq	%%rcx\n\t"
+			"jnz	loopb%=\n\t"
+
+			"end%=:\n\t"
+			"sbbq	%%rdx, %%rdx\n\t"
+			"movq	%%rdx, (%%rdi)\n\t"
+
+			"setc	%[borrow]\n\t"
+
+			: [borrow] "=rm" (borrow)
+			: [x] "rm" (x), [y] "rm" (y), [size] "rm" (size), [s_64] "rm" (s_64)
+			: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "cc", "memory"
+		);
+#else
+	 	int64_t borrow = 0;
+		const uint64_t * const x_t = &x[size - s_64 - 1];
+	 	for (size_t i = 0; i < s_64; ++i) y[i] = _subb(0, x_t[i], borrow);
+		uint64_t * const y_t = &y[s_64];
+		y_t[0] = _subb(x[0], x[size - 1], borrow);
+	 	for (size_t i = 1; i < size - s_64 - 1; ++i) y_t[i] = _subb(x[i], 0, borrow);
+		y[size - 1] = _subb(0, 0, borrow);
+#endif
+		if (borrow != 0) _add_F(y, size);
 	}
 
 	void neg(const size_t i)
@@ -438,17 +517,17 @@ private:
 	void lshift(const size_t i, const size_t s)
 	{
 		const size_t size = _size;
-		uint64_t * const buf = _buf;
 		uint64_t * const d_i = &_d[i * (size + _gap)];
-		_lshift(buf, 2 * size, d_i, size, s);
-		_mod_F(d_i, size, buf);
+		uint64_t * const buf = _buf;
+		_lshift(buf, d_i, size, s % 64);
+		_lshift_mod_F(d_i, buf, size, s / 64);
 	}
 
 	void negacyclic(const ModVector & rhs, const size_t i)
 	{
 		const size_t size = _size;
-		uint64_t * const buf = _buf;
 		uint64_t * const d_i = &_d[i * (size + _gap)];
+		uint64_t * const buf = _buf;
 		mpn_mul_n(buf, d_i, &rhs._d[i * (size + _gap)], size);
 		_mod_F(d_i, size, buf);
 	}
@@ -500,7 +579,7 @@ public:
 		for (size_t i = 0; i < m; ++i) { add_subr(j + i + 0 * m, j + i + 1 * m); lshift(j + i + 1 * m, me_2); }
 	}
 
-	void mul_Mersenne(const ModVector & rhs, const size_t m, const size_t j, const size_t norm = 0)
+	void mul_Mersenne(const ModVector & rhs, const size_t m, const size_t j)
 	{
 		// We have e = 0: r = 1
 		for (size_t i = 0; i < m; ++i) add_sub(j + i + 0 * m, j + i + 1 * m);
@@ -516,16 +595,33 @@ public:
 			negacyclic(rhs, j + 1 * m);
 		}
 
-		if (norm != 0)
+		for (size_t i = 0; i < m; ++i) add_sub(j + i + 0 * m, j + i + 1 * m);
+	}
+
+	void mul_Mersenne_0(const ModVector & rhs, const size_t m, const size_t norm)
+	{
+		const size_t m_2 = m / 2, n_2 = _n / 2;
+
+		for (size_t i = 0; i < m_2; ++i)
 		{
-			// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
-			for (size_t i = 0; i < m; ++i)
-			{
-				add_subr(j + i + 0 * m, j + i + 1 * m);
-				lshift(j + i + 0 * m, norm); neg(j + i + 0 * m); lshift(j + i + 1 * m, norm);
-			} 
+			add_sub(i + 0 * m_2, i + 2 * m_2); add_sub(i + 1 * m_2, i + 3 * m_2);
+			add_sub(i + 0 * m_2, i + 1 * m_2); lshift(i + 3 * m_2, n_2); add_sub(i + 2 * m_2, i + 3 * m_2);
 		}
-		else for (size_t i = 0; i < m; ++i) add_sub(j + i + 0 * m, j + i + 1 * m);
+
+		mul_Mersenne(rhs, m / 4, 0 * m_2);
+		mul(rhs, m / 4, 1 * m_2, 2 * n_2);
+		mul(rhs, m / 4, 2 * m_2, 1 * n_2);
+		mul(rhs, m / 4, 3 * m_2, 3 * n_2);
+
+		// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+		for (size_t i = 0; i < m_2; ++i)
+		{
+			add_sub(i + 0 * m_2, i + 1 * m_2); add_subr(i + 2 * m_2, i + 3 * m_2); lshift(i + 3 * m_2, n_2);
+			add_subr(i + 0 * m_2, i + 2 * m_2);
+			neg(i + 0 * m_2); lshift(i + 0 * m_2, norm); lshift(i + 2 * m_2, norm);
+			add_subr(i + 1 * m_2, i + 3 * m_2);
+			neg(i + 1 * m_2); lshift(i + 1 * m_2, norm); lshift(i + 3 * m_2, norm);
+		} 
 	}
 
 	void forward(const size_t m, const size_t j, const size_t e)
@@ -547,6 +643,22 @@ public:
 			forward_Mersenne(m / 2, j + 0 * m);
 			forward(m / 2, j + 1 * m, _n);
 		}
+	}
+
+	void forward_Mersenne_0(const size_t m)	// TODO 4-radix
+	{
+		const size_t m_2 = m / 2, n_2 = _n / 2;
+
+		for (size_t i = 0; i < m_2; ++i)
+		{
+			add_sub(i + 0 * m_2, i + 2 * m_2); add_sub(i + 1 * m_2, i + 3 * m_2);
+			add_sub(i + 0 * m_2, i + 1 * m_2); lshift(i + 3 * m_2, n_2); add_sub(i + 2 * m_2, i + 3 * m_2);
+		}
+
+		forward_Mersenne(m / 4, 0 * m_2);
+		forward(m / 4, 1 * m_2, 2 * n_2);
+		forward(m / 4, 2 * m_2, 1 * n_2);
+		forward(m / 4, 3 * m_2, 3 * n_2);
 	}
 };
 
@@ -648,7 +760,7 @@ public:
 
 	void get_x(uint64_t * const x, const size_t size) { get_vector(x, size, _x); }
 
-	void mul() { _y.forward_Mersenne(_l / 2, 0); _x.mul_Mersenne(_y, _l / 2, 0, _n - _k); }	// top-most recursion level
+	void mul() { _y.forward_Mersenne_0(_l / 2); _x.mul_Mersenne_0(_y, _l / 2, _n - _k); }	// top-most recursion level
 
 	static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n, const bool verbose)
 	{
