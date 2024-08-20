@@ -17,6 +17,9 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <gmp.h>
 
 #define finline	__attribute__((always_inline))
+#ifdef __x86_64
+	#define x64_asm
+#endif
 
 // A vector of l elements, operation are modulo 2^n + 1
 class ModVector
@@ -26,7 +29,7 @@ private:
 	uint64_t * const _buf;
 	uint64_t * const _d;
 
-#ifndef __x86_64
+#ifndef x64_asm
 	finline static uint64_t _addc(const uint64_t x, const uint64_t y, uint64_t & carry)
 	{
 		const __uint128_t t = x + __uint128_t(y) + carry;
@@ -55,9 +58,36 @@ private:
 		for (size_t i = src_size; i < x_size; ++i) x[i] = 0;
 	}
 
+	// x += a
+	finline static bool _add(uint64_t * const x, const size_t size, const uint64_t a)
+	{
+		const uint64_t x_0 = x[0] + a; x[0] = x_0;
+		if (x_0 >= a) return false;
+		for (size_t i = 1; i < size; ++i)	// carry
+		{
+			const uint64_t x_i = x[i] + 1; x[i] = x_i;
+			if (x_i != 0) return false;
+		}
+		return true;
+	}
+
+	// x -= a
+	finline static bool _sub(uint64_t * const x, const size_t size, const uint64_t a)
+	{
+		const uint64_t x_0 = x[0]; x[0] = x_0 - a;
+		if (x_0 >= a) return false;
+		for (size_t i = 1; i < size; ++i)	// borrow
+		{
+			const uint64_t x_i = x[i]; x[i] = x_i - 1;
+			if (x_i != 0) return false;
+		}
+		return true;
+	}
+
+	// x' = x + y, y' = x - y
 	finline static bool _add_sub(uint64_t * const x, uint64_t * const y, const size_t size)
 	{
-#ifdef __x86_64
+#ifdef x64_asm
 		const size_t size_4 = size / 4;		// size = 4 * size_4 + 1
 		char borrow = 0;
 		asm volatile
@@ -146,103 +176,6 @@ private:
 		return (borrow != 0);
 	}
 
-	finline static bool _add_subr(uint64_t * const x, uint64_t * const y, const size_t size)
-	{
-#ifdef __x86_64
-		const size_t size_4 = size / 4;		// size = 4 * size_4 + 1
-		char borrow = 0;
-		asm volatile
-		(
-			"movq	%[size_4], %%rcx\n\t"
-			"movq	%[x], %%rsi\n\t"
-			"movq	%[y], %%rdi\n\t"
-			"xorq	%%rax, %%rax\n\t"		// carry of sbb
-			"xorq	%%rdx, %%rdx\n\t"		// carry of adc
-			"clc\n\t"
-
-			"loop%=:\n\t"
-			"neg	%%al\n\t"				// CF is set to 0 if dl = 0, otherwise it is set to 1
-
-			"movq	(%%rsi), %%r8\n\t"
-			"movq	(%%rdi), %%rbx\n\t"
-			"movq	%%rbx, %%r9\n\t"		// r8 = x[0], r9 = y[0]
-			"sbbq	%%r8, %%rbx\n\t"
-			"movq	%%rbx, (%%rdi)\n\t"		// y[i] = rbx = y[i] - x[i]
-
-			"movq	8(%%rsi), %%r10\n\t"
-			"movq	8(%%rdi), %%rbx\n\t"
-			"movq	%%rbx, %%r11\n\t"		// r10 = x[1], r11 = y[1]
-			"sbbq	%%r10, %%rbx\n\t"
-			"movq	%%rbx, 8(%%rdi)\n\t"
-
-			"movq	16(%%rsi), %%r12\n\t"
-			"movq	16(%%rdi), %%rbx\n\t"
-			"movq	%%rbx, %%r13\n\t"		// r12 = x[2], r13 = y[2]
-			"sbbq	%%r12, %%rbx\n\t"
-			"movq	%%rbx, 16(%%rdi)\n\t"
-
-			"movq	24(%%rsi), %%r14\n\t"
-			"movq	24(%%rdi), %%rbx\n\t"
-			"movq	%%rbx, %%r15\n\t"		// r14 = x[3], r15 = y[3]
-			"sbbq	%%r14, %%rbx\n\t"
-			"movq	%%rbx, 24(%%rdi)\n\t"
-
-			"setc	%%al\n\t"
-			"neg	%%dl\n\t"
-
-			"adcq	%%r9, %%r8\n\t"
-			"movq	%%r8, (%%rsi)\n\t"		// x[i] = x[i] + y[i]
-			"adcq	%%r11, %%r10\n\t"
-			"movq	%%r10, 8(%%rsi)\n\t"
-			"adcq	%%r13, %%r12\n\t"
-			"movq	%%r12, 16(%%rsi)\n\t"
-			"adcq	%%r15, %%r14\n\t"
-			"movq	%%r14, 24(%%rsi)\n\t"
-
-			"setc	%%dl\n\t"
-
-			"decq	%%rcx\n\t"
-			"addq	$32, %%rsi\n\t"
-			"addq	$32, %%rdi\n\t"
-			"testq	%%rcx, %%rcx\n\t"
-			"jne	loop%=\n\t"
-
-			"neg	%%al\n\t"
-
-			"movq	(%%rsi), %%r8\n\t"
-			"movq	(%%rdi), %%rbx\n\t"
-			"movq	%%rbx, %%r9\n\t"
-			"sbbq	%%r8, %%rbx\n\t"
-			"movq	%%rbx, (%%rdi)\n\t"
-
-			"setc	%[borrow]\n\t"
-			"neg	%%dl\n\t"
-
-			"adcq	%%r9, %%r8\n\t"
-			"movq	%%r8, (%%rsi)\n\t"
-
-			: [borrow] "=rm" (borrow)
-			: [x] "rm" (x), [y] "rm" (y), [size_4] "rm" (size_4)
-			: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "cc", "memory"
-		);
-#else
-		uint64_t carry = 0; int64_t borrow = 0;
-		for (size_t i = 0; i < size; ++i)
-		{
-			const uint64_t x_i = x[i], y_i = y[i];
-			x[i] = _addc(x_i, y_i, carry);
-			y[i] = _subb(y_i, x_i, borrow);
-		}
-#endif
-		return (borrow != 0);
-	}
-
-	finline static bool _is_zero(const uint64_t * const x, const size_t size)
-	{
-		for (size_t i = 0; i < size; ++i) if (x[i] != 0) return false;
-		return true;
-	}
-
 	// y = x << s, 0 <= s < 64
 	finline static void _lshift(uint64_t * const y, const uint64_t * const x, const size_t size, const unsigned int s)
 	{
@@ -266,87 +199,15 @@ private:
 	}
 
 	// x += 2^n + 1
-	finline static void _add_F(uint64_t * const x, const size_t size)
-	{
-		x[size - 1] += 1;
-		const uint64_t x_0 = x[0] + 1; x[0] = x_0;
-		if (x_0 == 0)	// carry
-		{
-			for (size_t i = 1; i < size; ++i)
-			{
-				const uint64_t x_i = x[i] + 1; x[i] = x_i;
-				if (x_i != 0) break;
-			}
-		}
-	}
+	finline static void _add_F(uint64_t * const x, const size_t size) { x[size - 1] += 1; _add(x, size, 1); }
 
 	// x -= 2^n + 1
-	finline static void _sub_F(uint64_t * const x, const size_t size)
-	{
-		x[size - 1] -= 1;
-		const uint64_t x_0 = x[0]; x[0] = x_0 - 1;
-		if (x_0 == 0)	// borrow
-		{
-			for (size_t i = 1; i < size; ++i)
-			{
-				const uint64_t x_i = x[i]; x[i] = x_i - 1;
-				if (x_i != 0) break;
-			}
-		}
-	}
-
-	// x = 2^n + 1 - x
-	finline static void _F_sub(uint64_t * const x, const size_t size)
-	{
-#ifdef __x86_64
-		const size_t size_4 = size / 4;	// size = 4 * size_4 + 1
-		asm volatile
-		(
-			"movq	%[size_4], %%rcx\n\t"
-			"movq	%[x], %%rsi\n\t"
-			"xorq	%%rdx, %%rdx\n\t"
-			"clc\n\t"
-
-			"movq	$1, %%rax\n\t"
-
-			"loop%=:\n\t"
-			"sbbq	(%%rsi), %%rax\n\t"
-			"movq	%%rax, (%%rsi)\n\t"
-			"movq	%%rdx, %%rax\n\t"
-			"sbbq	8(%%rsi), %%rax\n\t"
-			"movq	%%rax, 8(%%rsi)\n\t"
-			"movq	%%rdx, %%rax\n\t"
-			"sbbq	16(%%rsi), %%rax\n\t"
-			"movq	%%rax, 16(%%rsi)\n\t"
-			"movq	%%rdx, %%rax\n\t"
-			"sbbq	24(%%rsi), %%rax\n\t"
-			"movq	%%rax, 24(%%rsi)\n\t"
-			"movq	%%rdx, %%rax\n\t"
-
-			"leaq	32(%%rsi), %%rsi\n\t"
-			"decq	%%rcx\n\t"
-			"jnz	loop%=\n\t"
-
-			"movq	$1, %%rax\n\t"
-			"sbbq	(%%rsi), %%rax\n\t"
-			"movq	%%rax, (%%rsi)\n\t"
-
-			:
-			: [x] "rm" (x), [size_4] "rm" (size_4)
-			: "rax", "rcx", "rdx", "rsi", "cc", "memory"
-		);
-#else
-		int64_t borrow = 0;
-		x[0] = _subb(1, x[0], borrow);
-		for (size_t i = 1; i < size - 1; ++i) x[i] = _subb(0, x[i], borrow);
-		x[size - 1] = _subb(1, x[size - 1], borrow);
-#endif
-	}
+	finline static void _sub_F(uint64_t * const x, const size_t size) { x[size - 1] -= 1; _sub(x, size, 1); }
 
 	// x = y (mod 2^n + 1)
 	finline static void _mod_F(uint64_t * const x, const size_t size, const uint64_t * const y)
 	{
-#ifdef __x86_64
+#ifdef x64_asm
 		char borrow = 0;
 		asm volatile
 		(
@@ -400,98 +261,33 @@ private:
 	// y = x << (64 * s_64) (mod 2^n + 1), s_64 < x_size - 1
 	finline static void _lshift_mod_F(uint64_t * const y, const uint64_t * const x, const size_t size, const size_t s_64)
 	{
-		if (s_64 == 0)
+		for (size_t i = 0; i < s_64; ++i) y[i] = ~x[size - 1 - s_64 + i];
+		for (size_t i = s_64; i < size - 1; ++i) y[i] = x[i - s_64];
+		y[size - 1] = 0;
+
+		if (s_64 != 0)
 		{
-			const uint64_t x_0 = x[0], x_e = x[size - 1];
-			y[0] = x_0 - x_e;
-			for (size_t i = 1; i < size - 1; ++i) y[i] = x[i];
-			y[size - 1] = 0;
-			if (x_0 < x_e)	// borrow
-			{
-				for (size_t i = 1; i < size; ++i)
-				{
-					const uint64_t y_i = y[i]; y[i] = y_i - 1;
-					if (y_i != 0) return;
-				}
-				_add_F(y, size);
-			}
-			return;
+			const bool carry = _add(y, s_64, 1);	// two's complement
+			// If carry then we have 0 = -0 otherwise sub 1 to next term
+			if (!carry) { const bool borrow = _sub(&y[s_64], size - s_64, 1); if (borrow) _add_F(y, size); }
 		}
 
-#ifdef __x86_64
-		char borrow = 0;
-		asm volatile
-		(
-			"movq	%[size], %%rbx\n\t"
-			"movq	%[s_64], %%rcx\n\t"
-			"subq	%%rcx, %%rbx\n\t"
-			"decq	%%rbx\n\t"				// size - s_64 - 1
-
-			"movq	%[x], %%rsi\n\t"
-			"movq	%[y], %%rdi\n\t"
-			"xorq	%%rdx, %%rdx\n\t"
-			"clc\n\t"
-
-			"loopa%=:\n\t"
-			"movq	%%rdx, %%rax\n\t"
-			"sbbq	(%%rsi,%%rbx,8), %%rax\n\t"
-			"movq	%%rax, (%%rdi)\n\t"
-
-			"leaq	8(%%rsi), %%rsi\n\t"
-			"leaq	8(%%rdi), %%rdi\n\t"
-			"decq	%%rcx\n\t"
-			"jnz	loopa%=\n\t"
-
-			"movq	%%rbx, %%rcx\n\t"
-			"movq	(%%rsi,%%rbx,8), %%rbx\n\t"
-			"movq	%[x], %%rsi\n\t"
-			"movq	(%%rsi), %%rax\n\t"
-			"sbbq	%%rbx, %%rax\n\t"
-			"movq	%%rax, (%%rdi)\n\t"
-
-			"leaq	8(%%rsi), %%rsi\n\t"
-			"leaq	8(%%rdi), %%rdi\n\t"
-
-			"decq	%%rcx\n\t"
-			"jz		end%=\n\t"
-
-			"loopb%=:\n\t"
-			"movq	(%%rsi), %%rax\n\t"
-			"sbbq	%%rdx, %%rax\n\t"
-			"movq	%%rax, (%%rdi)\n\t"
-
-			"leaq	8(%%rsi), %%rsi\n\t"
-			"leaq	8(%%rdi), %%rdi\n\t"
-			"decq	%%rcx\n\t"
-			"jnz	loopb%=\n\t"
-
-			"end%=:\n\t"
-			"sbbq	%%rdx, %%rdx\n\t"
-			"movq	%%rdx, (%%rdi)\n\t"
-
-			"setc	%[borrow]\n\t"
-
-			: [borrow] "=rm" (borrow)
-			: [x] "rm" (x), [y] "rm" (y), [size] "rm" (size), [s_64] "rm" (s_64)
-			: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "cc", "memory"
-		);
-#else
-	 	int64_t borrow = 0;
-		const uint64_t * const x_t = &x[size - s_64 - 1];
-	 	for (size_t i = 0; i < s_64; ++i) y[i] = _subb(0, x_t[i], borrow);
-		uint64_t * const y_t = &y[s_64];
-		y_t[0] = _subb(x[0], x[size - 1], borrow);
-	 	for (size_t i = 1; i < size - s_64 - 1; ++i) y_t[i] = _subb(x[i], 0, borrow);
-		y[size - 1] = _subb(0, 0, borrow);
-#endif
-		if (borrow != 0) _add_F(y, size);
+		const bool borrow = _sub(&y[s_64], size - s_64, x[size - 1]); if (borrow) _add_F(y, size);
 	}
 
-	void neg(const size_t i)
+	// y = -x << (64 * s_64) (mod 2^n + 1), s_64 < x_size - 1
+	finline static void _nlshift_mod_F(uint64_t * const y, const uint64_t * const x, const size_t size, const size_t s_64)
 	{
-		const size_t size = _size;
-		uint64_t * const d_i = &_d[i * (size + _gap)];
-		if (!_is_zero(d_i, size)) _F_sub(d_i, size);
+	 	for (size_t i = 0; i < s_64; ++i) y[i] = x[size - 1 - s_64 + i];
+	 	for (size_t i = s_64; i < size - 1; ++i) y[i] = ~x[i - s_64];
+		y[size - 1] = 0;
+
+		const bool carry = _add(&y[s_64], size - 1 - s_64, 1);	// two's complement
+		// If carry then we have 0 = -0 otherwise add 1 = -2^n
+		if (!carry) _add(y, size, 1);
+
+		_add(&y[s_64], size - s_64, x[size - 1]);
+		if (_ge_F(y, size)) _sub_F(y, size);
 	}
 
 	void add_sub(const size_t i, const size_t j)
@@ -500,16 +296,6 @@ private:
 		uint64_t * const d_i = &_d[i * (size + _gap)];
 		uint64_t * const d_j = &_d[j * (size + _gap)];
 		const bool borrow = _add_sub(d_i, d_j, size);
-		if (_ge_F(d_i, size)) _sub_F(d_i, size);
-		if (borrow) _add_F(d_j, size);
-	}
-
-	void add_subr(const size_t i, const size_t j)
-	{
-		const size_t size = _size;
-		uint64_t * const d_i = &_d[i * (size + _gap)];
-		uint64_t * const d_j = &_d[j * (size + _gap)];
-		const bool borrow = _add_subr(d_i, d_j, size);
 		if (_ge_F(d_i, size)) _sub_F(d_i, size);
 		if (borrow) _add_F(d_j, size);
 	}
@@ -523,12 +309,22 @@ private:
 		_lshift_mod_F(d_i, buf, size, s / 64);
 	}
 
+	void rshift(const size_t i, const size_t s)
+	{
+		// 2^n = -1 then 2^-s = -2^{n - s}
+		const size_t size = _size, ls = _n - s;
+		uint64_t * const d_i = &_d[i * (size + _gap)];
+		uint64_t * const buf = _buf;
+		_lshift(buf, d_i, size, ls % 64);
+		_nlshift_mod_F(d_i, buf, size, ls / 64);
+	}
+
 	void negacyclic(const ModVector & rhs, const size_t i)
 	{
 		const size_t size = _size;
 		uint64_t * const d_i = &_d[i * (size + _gap)];
 		uint64_t * const buf = _buf;
-		mpn_mul_n(buf, d_i, &rhs._d[i * (size + _gap)], size);
+		mpn_mul_n(mp_ptr(buf), mp_srcptr(d_i), mp_srcptr(&rhs._d[i * (size + _gap)]), mp_size_t(size));
 		_mod_F(d_i, size, buf);
 	}
 
@@ -562,12 +358,14 @@ public:
 	void mul(const ModVector & rhs, const size_t m, const size_t j, const size_t e)
 	{
 		// previous root is r^2 = 2^e, new root is r = 2^{e/2}
-		for (size_t i = 0; i < m; ++i) { lshift(j + i + 1 * m, e / 2); add_sub(j + i + 0 * m, j + i + 1 * m); }
+		const size_t e_2 = e / 2;
+
+		for (size_t i = 0; i < m; ++i) { lshift(j + i + 1 * m, e_2); add_sub(j + i + 0 * m, j + i + 1 * m); }
 
 		if (m > 1)
 		{
-			mul(rhs, m / 2, j + 0 * m, e / 2);		//  r = 2^{e/2}
-			mul(rhs, m / 2, j + 1 * m, e / 2 + _n);	// -r = 2^{e/2 + n}
+			mul(rhs, m / 2, j + 0 * m, e_2);		//  r = 2^{e/2}
+			mul(rhs, m / 2, j + 1 * m, e_2 + _n);	// -r = 2^{e/2 + n}
 		}
 		else
 		{
@@ -575,13 +373,12 @@ public:
 			negacyclic(rhs, j + 1 * m);
 		}
 
-		const size_t me_2 = _n - e / 2;		// 2^n = -1 then r^-1 = 2^-{e/2} = -2^{n - e/2}
-		for (size_t i = 0; i < m; ++i) { add_subr(j + i + 0 * m, j + i + 1 * m); lshift(j + i + 1 * m, me_2); }
+		for (size_t i = 0; i < m; ++i) { add_sub(j + i + 0 * m, j + i + 1 * m); rshift(j + i + 1 * m, e_2); }
 	}
 
 	void mul_Mersenne(const ModVector & rhs, const size_t m, const size_t j)
 	{
-		// We have e = 0: r = 1
+		// We have e = 0, root is 1
 		for (size_t i = 0; i < m; ++i) add_sub(j + i + 0 * m, j + i + 1 * m);
 
 		if (m > 1)
@@ -598,7 +395,7 @@ public:
 		for (size_t i = 0; i < m; ++i) add_sub(j + i + 0 * m, j + i + 1 * m);
 	}
 
-	void mul_Mersenne_0(const ModVector & rhs, const size_t m, const size_t norm)
+	void mul_Mersenne_0(const ModVector & rhs, const size_t m, const size_t k)
 	{
 		const size_t m_2 = m / 2, n_2 = _n / 2;
 
@@ -613,14 +410,12 @@ public:
 		mul(rhs, m / 4, 2 * m_2, 1 * n_2);
 		mul(rhs, m / 4, 3 * m_2, 3 * n_2);
 
-		// Components are not halved during the reverse transform then multiply outputs by 1/l = -2^n / l = -2^{n - k}
+		// Components are not halved during the reverse transform then multiply outputs by 1 / 2^k
 		for (size_t i = 0; i < m_2; ++i)
 		{
-			add_sub(i + 0 * m_2, i + 1 * m_2); add_subr(i + 2 * m_2, i + 3 * m_2); lshift(i + 3 * m_2, n_2);
-			add_subr(i + 0 * m_2, i + 2 * m_2);
-			neg(i + 0 * m_2); lshift(i + 0 * m_2, norm); lshift(i + 2 * m_2, norm);
-			add_subr(i + 1 * m_2, i + 3 * m_2);
-			neg(i + 1 * m_2); lshift(i + 1 * m_2, norm); lshift(i + 3 * m_2, norm);
+			add_sub(i + 0 * m_2, i + 1 * m_2); add_sub(i + 2 * m_2, i + 3 * m_2); rshift(i + 3 * m_2, n_2);
+			add_sub(i + 0 * m_2, i + 2 * m_2); rshift(i + 0 * m_2, k); rshift(i + 2 * m_2, k);
+			add_sub(i + 1 * m_2, i + 3 * m_2); rshift(i + 1 * m_2, k); rshift(i + 3 * m_2, k);
 		} 
 	}
 
@@ -709,7 +504,7 @@ private:
 	// Compute sum of the l slices
 	void get_vector(uint64_t * const x, const size_t size, const ModVector & v)
 	{
-		for (size_t i = 0; i < size; ++i) x[i] = 0;
+		size_t clear_index = 0;
 
 		uint64_t * const r = new uint64_t[v.get_size() + 1];
 
@@ -730,11 +525,14 @@ private:
 					r[r_size] = prev >> (64 - s);
 				}
 				else r[r_size] = 0;
-				mpn_add_n(&x[index], &x[index], r, r_size + 1);
+				const size_t prev_clear_index = clear_index; clear_index = index + r_size + 1;
+				for (size_t i = prev_clear_index; i < clear_index; ++i) x[i] = 0;
+				mpn_add_n(mp_ptr(&x[index]), mp_srcptr(&x[index]), mp_srcptr(r), mp_size_t(r_size + 1));
 			}
 		}
 
 		delete[] r;
+		for (size_t i = clear_index; i < size; ++i) x[i] = 0;
 	}
 
 	static double get_param(const size_t N, const unsigned int k, size_t & M, size_t & n)
@@ -760,7 +558,7 @@ public:
 
 	void get_x(uint64_t * const x, const size_t size) { get_vector(x, size, _x); }
 
-	void mul() { _y.forward_Mersenne_0(_l / 2); _x.mul_Mersenne_0(_y, _l / 2, _n - _k); }	// top-most recursion level
+	void mul() { _y.forward_Mersenne_0(_l / 2); _x.mul_Mersenne_0(_y, _l / 2, _k); }	// top-most recursion level
 
 	static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n, const bool verbose)
 	{
