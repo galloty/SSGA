@@ -328,16 +328,16 @@ private:
 		_mod_F(d_i, size, buf);
 	}
 
-	static uint64_t * _aligned_alloc(const size_t size, const size_t alignment, const size_t offset = 0)
+	static void * _aligned_alloc(const size_t size, const size_t alignment, const size_t offset = 0)
 	{
 		void * const alloc_ptr = std::malloc(size + alignment + offset + sizeof(size_t));
 		const size_t addr = size_t(alloc_ptr) + alignment + sizeof(size_t);
 		size_t * const ptr = (size_t *)(addr - addr % alignment + offset);
 		ptr[-1] = size_t(alloc_ptr);
-		return (uint64_t *)(ptr);
+		return (void *)(ptr);
 	}
 
-	static void _aligned_free(uint64_t * const ptr)
+	static void _aligned_free(void * const ptr)
 	{
 		void * const alloc_ptr = (void *)((size_t *)(ptr))[-1];
 		std::free(alloc_ptr);
@@ -347,7 +347,8 @@ private:
 
 public:
 	ModVector(const size_t n, const size_t l) : _size(n / 64 + 1), _n(n),
-		_buf(_aligned_alloc(2 * _size * sizeof(uint64_t), 4096)), _d(_aligned_alloc(l * (_size + _gap) * sizeof(uint64_t), 4096)) {}	// 4kB TLB pages
+		_buf(static_cast<uint64_t *>(_aligned_alloc(2 * _size * sizeof(uint64_t), 4096))),
+		_d(static_cast<uint64_t *>(_aligned_alloc(l * (_size + _gap) * sizeof(uint64_t), 4096))) {}	// 4kB TLB pages
 	virtual ~ModVector() { _aligned_free(_buf); _aligned_free(_d); }
 
 	size_t get_size() const { return _size; }
@@ -405,10 +406,10 @@ public:
 			add_sub(i + 0 * m_2, i + 1 * m_2); lshift(i + 3 * m_2, n_2); add_sub(i + 2 * m_2, i + 3 * m_2);
 		}
 
-		mul_Mersenne(rhs, m / 4, 0 * m_2);
-		mul(rhs, m / 4, 1 * m_2, 2 * n_2);
-		mul(rhs, m / 4, 2 * m_2, 1 * n_2);
-		mul(rhs, m / 4, 3 * m_2, 3 * n_2);
+		mul_Mersenne(rhs, m_2 / 2, 0 * m_2);
+		mul(rhs, m_2 / 2, 1 * m_2, 2 * n_2);
+		mul(rhs, m_2 / 2, 2 * m_2, 1 * n_2);
+		mul(rhs, m_2 / 2, 3 * m_2, 3 * n_2);
 
 		// Components are not halved during the reverse transform then multiply outputs by 1 / 2^k
 		for (size_t i = 0; i < m_2; ++i)
@@ -440,7 +441,7 @@ public:
 		}
 	}
 
-	void forward_Mersenne_0(const size_t m)	// TODO 4-radix
+	void forward_Mersenne_0(const size_t m)
 	{
 		const size_t m_2 = m / 2, n_2 = _n / 2;
 
@@ -450,10 +451,10 @@ public:
 			add_sub(i + 0 * m_2, i + 1 * m_2); lshift(i + 3 * m_2, n_2); add_sub(i + 2 * m_2, i + 3 * m_2);
 		}
 
-		forward_Mersenne(m / 4, 0 * m_2);
-		forward(m / 4, 1 * m_2, 2 * n_2);
-		forward(m / 4, 2 * m_2, 1 * n_2);
-		forward(m / 4, 3 * m_2, 3 * n_2);
+		forward_Mersenne(m_2 / 2, 0 * m_2);
+		forward(m_2 / 2, 1 * m_2, 2 * n_2);
+		forward(m_2 / 2, 2 * m_2, 1 * n_2);
+		forward(m_2 / 2, 3 * m_2, 3 * n_2);
 	}
 };
 
@@ -525,9 +526,10 @@ private:
 					r[r_size] = prev >> (64 - s);
 				}
 				else r[r_size] = 0;
-				const size_t prev_clear_index = clear_index; clear_index = index + r_size + 1;
+
+				const size_t prev_clear_index = clear_index; clear_index = std::min(index + r_size + 1, size);
 				for (size_t i = prev_clear_index; i < clear_index; ++i) x[i] = 0;
-				mpn_add_n(mp_ptr(&x[index]), mp_srcptr(&x[index]), mp_srcptr(r), mp_size_t(r_size + 1));
+				mpn_add_n(mp_ptr(&x[index]), mp_srcptr(&x[index]), mp_srcptr(r), mp_size_t(clear_index - index));
 			}
 		}
 
@@ -553,12 +555,12 @@ public:
 
 	virtual ~SSG() {}
 
-	void set_x(const uint64_t * const x, const size_t size) { set_vector(_x, x, size); }
-	void set_y(const uint64_t * const y, const size_t size) { set_vector(_y, y, size); }
+	void set_y(const uint64_t * const y, const size_t size) { set_vector(_y, y, size); _y.forward_Mersenne_0(_l / 2); }
 
 	void get_x(uint64_t * const x, const size_t size) { get_vector(x, size, _x); }
 
-	void mul() { _y.forward_Mersenne_0(_l / 2); _x.mul_Mersenne_0(_y, _l / 2, _k); }	// top-most recursion level
+	void mul_xy(const uint64_t * const x, const size_t size) { set_vector(_x, x, size); _x.mul_Mersenne_0(_y, _l / 2, _k); }
+	void sqr(const uint64_t * const x, const size_t size) { set_vector(_x, x, size); _x.mul_Mersenne_0(_x, _l / 2, _k); }
 
 	static void get_best_param(const size_t N, unsigned int & k, size_t & M, size_t & n, const bool verbose)
 	{
@@ -583,11 +585,20 @@ static void SSG_mul(uint64_t * const z, const uint64_t * const x, const size_t x
 	unsigned int k = 0;	size_t M, n; SSG::get_best_param(64 * z_size, k, M, n, verbose);
 
 	SSG ssg(k, M, n);
-	ssg.set_x(x, x_size);
 	ssg.set_y(y, y_size);
-	ssg.mul();
+	ssg.mul_xy(x, x_size);
 	ssg.get_x(z, z_size);
 }
+
+// static void SSG_sqr(uint64_t * const z, const uint64_t * const x, const size_t x_size, const bool verbose)
+// {
+// 	const size_t z_size = 2 * x_size;
+// 	unsigned int k = 0;	size_t M, n; SSG::get_best_param(64 * z_size, k, M, n, verbose);
+
+// 	SSG ssg(k, M, n);
+// 	ssg.sqr(x, x_size);
+// 	ssg.get_x(z, z_size);
+// }
 
 int main()
 {
